@@ -4,3 +4,5 @@ __pycache__/
 data/raw/
 data/cache/
 output/scored_stands.geojson
+deploy/
+.wrangler/
