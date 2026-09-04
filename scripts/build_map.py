@@ -243,7 +243,7 @@ const STANDS = __GEOJSON__;
 
 const COLORS = { high: "#1a7a2e", medium: "#d9a441" };
 
-const map = L.map('map', { preferCanvas: true });
+const map = L.map('map', { preferCanvas: true, zoomControl: false });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors',
   maxZoom: 19,
