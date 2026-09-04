@@ -222,19 +222,21 @@ HTML_TEMPLATE = """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Karkkila kantarelli-todennäköisyyskartta</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   html, body { margin: 0; height: 100%; font-family: sans-serif; }
   #map { height: 100%; }
 
-  .legend { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 1000;
-            background: white; padding: 10px 30px 10px 14px; border-radius: 10px; box-shadow: 0 1px 6px rgba(0,0,0,.4);
-            font-size: 16px; line-height: 1.5; max-width: 90vw; }
-  .legend span { display: inline-block; width: 16px; height: 16px; margin-right: 6px; vertical-align: middle; border-radius: 3px; }
-  .legend small { font-size: 13px; color: #444; }
-  .legend-close { position: absolute; top: 4px; right: 6px; width: 28px; height: 28px; border: none; background: none;
+  .legend { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000;
+            background: white; box-shadow: 0 -1px 6px rgba(0,0,0,.3);
+            padding: 10px 40px calc(10px + env(safe-area-inset-bottom, 0px)) 14px;
+            font-size: 16px; line-height: 1.4; }
+  .legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+  .legend span.swatch { display: inline-block; width: 14px; height: 14px; margin-right: 4px; vertical-align: middle; border-radius: 3px; }
+  .legend small { display: block; margin-top: 4px; font-size: 13px; color: #444; }
+  .legend-close { position: absolute; top: 6px; right: 8px; width: 28px; height: 28px; border: none; background: none;
                   font-size: 20px; line-height: 28px; color: #888; cursor: pointer; }
 
   .my-location-dot { width: 16px; height: 16px; border-radius: 50%; background: #1a73e8; border: 2px solid white; box-shadow: 0 0 0 2px rgba(26,115,232,.5); }
@@ -320,10 +322,12 @@ const legend = document.createElement("div");
 legend.className = "legend";
 legend.innerHTML =
   '<button class="legend-close" aria-label="Piilota selite">×</button>' +
-  "<b>Kantarelli-todennäköisyys</b><br>" +
-  `<span style="background:${COLORS.high}"></span> Korkea<br>` +
-  `<span style="background:${COLORS.medium}"></span> Kohtalainen<br>` +
-  "Paksumpi reunaviiva = lähellä harjumuodostumaa<br>" +
+  '<div class="legend-row">' +
+  "<b>Kantarelli-todennäköisyys:</b>" +
+  `<span><span class="swatch" style="background:${COLORS.high}"></span>Korkea</span>` +
+  `<span><span class="swatch" style="background:${COLORS.medium}"></span>Kohtalainen</span>` +
+  "<span>Paksu reuna = lähellä harjumuodostumaa</span>" +
+  "</div>" +
   "<small>Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) perustuva arvio - ei mittaustietoa itiöemistä.</small>";
 document.body.appendChild(legend);
 
