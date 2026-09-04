@@ -1,8 +1,8 @@
 """Download the source datasets for the chanterelle habitat map.
 
 Sources:
-- Suomen metsakeskus (Finnish Forest Centre) open forest resource data
-  (metsavarakuviot), municipality-level GeoPackage.
+- Suomen metsäkeskus (Finnish Forest Centre) open forest resource data
+  (metsävarakuviot), municipality-level GeoPackage.
 - GTK (Geological Survey of Finland) glaciofluvial / moraine formation
   polygons (eskers etc.), fetched by bounding box from their ArcGIS REST
   service, clipped to the extent of the forest stand data above.

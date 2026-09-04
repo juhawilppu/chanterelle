@@ -63,8 +63,8 @@ that (hopefully) finds you some mushrooms.
 
 ## Data sources
 
-- [Suomen metsakeskus](https://www.metsakeskus.fi/fi/avoin-metsa-ja-luontotieto) —
-  open forest resource data (metsavarakuviot): species, age, development
+- [Suomen metsäkeskus](https://www.metsakeskus.fi/fi/avoin-metsa-ja-luontotieto) —
+  open forest resource data (metsävarakuviot): species, age, development
   class, site fertility, soil type, drainage state.
 - [GTK](https://www.gtk.fi/) (Geological Survey of Finland) — glaciofluvial
   and moraine formation polygons (eskers), via ArcGIS REST.

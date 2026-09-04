@@ -28,7 +28,7 @@ OUTPUT_HTML = ROOT / "output" / "karkkila_kantarelli_map.html"
 ESKER_BUFFER_M = 150
 CURRENT_TREESTAND_CLASS = "2"  # "Nykytilan puusto" = current, as opposed to inventory/forecast
 
-# --- code -> points lookups, derived from the metsatietostandardi code tables ---
+# --- code -> points lookups, derived from the metsätietostandardi code tables ---
 
 FERTILITY_POINTS = {  # kasvupaikka / fertilityclass
     "1": 15,  # Lehto - lush but often too dense/herby
@@ -38,16 +38,16 @@ FERTILITY_POINTS = {  # kasvupaikka / fertilityclass
     "5": 5,   # Kuiva kangas (CT)
     "6": 0,   # Karukkokangas
     "7": 0,   # Kalliomaa ja hietikko
-    "8": 0,   # Lakimetsa ja tunturi
+    "8": 0,   # Lakimetsä ja tunturi
 }
 
 DEVELOPMENT_POINTS = {  # developmentclass
-    "02": 15,  # Nuori kasvatusmetsikko
-    "03": 25,  # Varttunut kasvatusmetsikko - prime
-    "04": 22,  # Uudistuskypsa metsikko - prime
-    "05": 15,  # Suojuspuumetsikko
-    "ER": 18,  # Eri-ikaisrakenteinen
-    "S0": 5,   # Siemenpuumetsikko - too open
+    "02": 15,  # Nuori kasvatusmetsikkö
+    "03": 25,  # Varttunut kasvatusmetsikkö - prime
+    "04": 22,  # Uudistuskypsä metsikkö - prime
+    "05": 15,  # Suojuspuumetsikkö
+    "ER": 18,  # Eri-ikäisrakenteinen
+    "S0": 5,   # Siemenpuumetsikkö - too open
     "Y1": 5,   # Ylispuustoinen taimikko
     "T2": 3,   # Taimikko yli 1.3 m - too young
 }
@@ -65,19 +65,19 @@ DRAINAGE_MULTIPLIER = {  # drainagestate
     "2": 0.5,  # Soistunut kangas - paludified
 }
 
-EXCLUDED_SUBGROUP = {"2", "3", "4", "5"}  # Korpi, Rame, Neva, Letto - mire types
+EXCLUDED_SUBGROUP = {"2", "3", "4", "5"}  # Korpi, Räme, Neva, Letto - mire types
 
 SPECIES_WEIGHT = {  # treespecies -> mycorrhizal-partner weight for kantarelli
     "2": 1.0,   # Kuusi / Norway spruce - main host
     "3": 0.6,   # Rauduskoivu / silver birch
     "4": 0.6,   # Hieskoivu / downy birch
-    "1": 0.25,  # Manty / Scots pine
+    "1": 0.25,  # Mänty / Scots pine
 }
 DEFAULT_SPECIES_WEIGHT = 0.1
 
 TREESPECIES_LABELS = {
-    "1": "manty", "2": "kuusi", "3": "rauduskoivu", "4": "hieskoivu",
-    "5": "haapa", "6": "harmaaleppa", "7": "tervaleppa",
+    "1": "mänty", "2": "kuusi", "3": "rauduskoivu", "4": "hieskoivu",
+    "5": "haapa", "6": "harmaaleppä", "7": "tervaleppä",
 }
 
 
@@ -183,9 +183,9 @@ LABELS = {
         "4": "Kuivahko kangas (VT)", "5": "Kuiva kangas (CT)", "6": "Karukkokangas",
     },
     "developmentclass": {
-        "02": "Nuori kasvatusmetsikko", "03": "Varttunut kasvatusmetsikko",
-        "04": "Uudistuskypsa metsikko", "05": "Suojuspuumetsikko",
-        "ER": "Eri-ikaisrakenteinen", "S0": "Siemenpuumetsikko",
+        "02": "Nuori kasvatusmetsikkö", "03": "Varttunut kasvatusmetsikkö",
+        "04": "Uudistuskypsä metsikkö", "05": "Suojuspuumetsikkö",
+        "ER": "Eri-ikäisrakenteinen", "S0": "Siemenpuumetsikkö",
         "Y1": "Ylispuustoinen taimikko", "T2": "Taimikko",
     },
 }
@@ -213,7 +213,7 @@ HTML_TEMPLATE = """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>Karkkila kantarelli-todennakoisyyskartta</title>
+<title>Karkkila kantarelli-todennäköisyyskartta</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   html, body { margin: 0; height: 100%; font-family: sans-serif; }
@@ -254,8 +254,8 @@ function onEachFeature(feature, layer) {
     `Kasvupaikka: ${p.fertility_label}<br>` +
     `Kehitysluokka: ${p.development_label}<br>` +
     `Vallitseva puulaji: ${p.dominant_species}<br>` +
-    `Ika: ${p.age ?? "?"} v, Ala: ${p.area_ha} ha` +
-    (p.near_esker ? "<br>Lahella harju-/reunamuodostumaa" : "")
+    `Ikä: ${p.age ?? "?"} v, Ala: ${p.area_ha} ha` +
+    (p.near_esker ? "<br>Lähellä harju-/reunamuodostumaa" : "")
   );
 }
 
@@ -263,32 +263,32 @@ const layer = L.geoJSON(STANDS, { style, onEachFeature }).addTo(map);
 map.fitBounds(layer.getBounds());
 
 const overlays = {
-  "Korkea todennakoisyys": L.geoJSON(STANDS, {
+  "Korkea todennäköisyys": L.geoJSON(STANDS, {
     filter: f => f.properties.category === "high", style, onEachFeature,
   }),
-  "Kohtalainen todennakoisyys": L.geoJSON(STANDS, {
+  "Kohtalainen todennäköisyys": L.geoJSON(STANDS, {
     filter: f => f.properties.category === "medium", style, onEachFeature,
   }),
-  "Matala todennakoisyys": L.geoJSON(STANDS, {
+  "Matala todennäköisyys": L.geoJSON(STANDS, {
     filter: f => f.properties.category === "low", style, onEachFeature,
   }),
 };
 // swap the combined layer for the three toggleable ones; "low" starts hidden to keep the map readable
 map.removeLayer(layer);
-overlays["Korkea todennakoisyys"].addTo(map);
-overlays["Kohtalainen todennakoisyys"].addTo(map);
+overlays["Korkea todennäköisyys"].addTo(map);
+overlays["Kohtalainen todennäköisyys"].addTo(map);
 L.control.layers(null, overlays, { collapsed: false }).addTo(map);
 
 const legend = L.control({ position: "bottomright" });
 legend.onAdd = function () {
   const div = L.DomUtil.create("div", "legend");
   div.innerHTML =
-    "<b>Kantarelli-todennakoisyys</b><br>" +
+    "<b>Kantarelli-todennäköisyys</b><br>" +
     `<span style="background:${COLORS.high}"></span> Korkea<br>` +
     `<span style="background:${COLORS.medium}"></span> Kohtalainen<br>` +
     `<span style="background:${COLORS.low}"></span> Matala<br>` +
-    "Paksumpi reunaviiva = lahella harjumuodostumaa<br>" +
-    "<small>Metsakuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maapera) perustuva arvio - ei mittaustietoa itiemista.</small>";
+    "Paksumpi reunaviiva = lähellä harjumuodostumaa<br>" +
+    "<small>Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) perustuva arvio - ei mittaustietoa itiöemistä.</small>";
   return div;
 };
 legend.addTo(map);
@@ -338,7 +338,7 @@ setInterval(updateLocation, LOCATION_REFRESH_MS);
 
 
 def render_html(geojson_dict: dict) -> str:
-    return HTML_TEMPLATE.replace("__GEOJSON__", json.dumps(geojson_dict))
+    return HTML_TEMPLATE.replace("__GEOJSON__", json.dumps(geojson_dict, ensure_ascii=False))
 
 
 def main() -> None:
@@ -351,8 +351,8 @@ def main() -> None:
 
     OUTPUT_GEOJSON.parent.mkdir(parents=True, exist_ok=True)
     geojson_dict = to_geojson_dict(scored)
-    OUTPUT_GEOJSON.write_text(json.dumps(geojson_dict))
-    OUTPUT_HTML.write_text(render_html(geojson_dict))
+    OUTPUT_GEOJSON.write_text(json.dumps(geojson_dict, ensure_ascii=False), encoding="utf-8")
+    OUTPUT_HTML.write_text(render_html(geojson_dict), encoding="utf-8")
     print(f"Wrote {OUTPUT_GEOJSON}")
     print(f"Wrote {OUTPUT_HTML}")
 
