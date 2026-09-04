@@ -228,7 +228,7 @@ HTML_TEMPLATE = """<!doctype html>
   .legend { background: white; padding: 8px 12px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.4); font-size: 13px; line-height: 1.5; }
   .legend span { display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: middle; border-radius: 3px; }
   .my-location-dot { width: 16px; height: 16px; border-radius: 50%; background: #1a73e8; border: 2px solid white; box-shadow: 0 0 0 2px rgba(26,115,232,.5); }
-  .gmaps-btn { display: inline-block; margin-top: 8px; padding: 5px 10px; background: #1a73e8; color: white; border-radius: 4px; text-decoration: none; font-size: 12px; }
+  .gmaps-btn { display: inline-block; margin-top: 8px; padding: 5px 10px; background: #1a73e8; color: white !important; border-radius: 4px; text-decoration: none; font-size: 12px; }
 </style>
 </head>
 <body>
