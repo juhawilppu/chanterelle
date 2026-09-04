@@ -31,8 +31,9 @@ result as an interactive map. Click any stand for its score and the
 forestry data behind it. Open it on your phone and it'll track your live
 location on the map too, refreshed every 30 seconds.
 
-It's a habitat-suitability heuristic, not a model verified against actual
-chanterelle sightings — treat it as "worth checking," not a guarantee.
+It's a habitat-suitability heuristic. The factor weights are calibrated
+against real chanterelle sightings from laji.fi (see `scripts/calibrate.py`),
+but it's still a model, not a guarantee — treat it as "worth checking."
 And a reminder: mushroom picking is covered by *jokamiehenoikeus*
 (everyman's right) everywhere shown, regardless of who owns the land.
 
@@ -43,6 +44,10 @@ And a reminder: mushroom picking is covered by *jokamiehenoikeus*
   class, site fertility, soil type, drainage state.
 - [GTK](https://www.gtk.fi/) (Geological Survey of Finland) — glaciofluvial
   and moraine formation polygons (eskers), via ArcGIS REST.
+- [laji.fi](https://laji.fi/) (Finnish Biodiversity Information Facility) —
+  real Cantharellus cibarius sighting coordinates, used to calibrate the
+  scoring weights (not shown on the map itself). Requires a free API token;
+  see `scripts/calibrate.py`.
 
 ## Setup
 
@@ -63,6 +68,12 @@ python scripts/build_map.py       # scores stands, writes output/
 ```
 
 Open `output/karkkila_kantarelli_map.html` directly in a browser.
+
+To recalibrate the scoring weights against real sightings, put a free
+[laji.fi](https://laji.fi/) API token in `.env` as `LAJI_FI_TOKEN=...`, then
+run `python scripts/calibrate.py`. It prints a presence-vs-background
+comparison per factor; use that to inform the weight constants at the top of
+`build_map.py` by hand.
 
 To target a different municipality, change `MUNICIPALITY` at the top of
 both scripts and rerun.

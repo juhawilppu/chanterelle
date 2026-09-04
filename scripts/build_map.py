@@ -31,25 +31,36 @@ CURRENT_TREESTAND_CLASS = "2"  # "Nykytilan puusto" = current, as opposed to inv
 # --- code -> points lookups, derived from the metsätietostandardi code tables ---
 
 FERTILITY_POINTS = {  # kasvupaikka / fertilityclass
-    "1": 15,  # Lehto - lush but often too dense/herby
-    "2": 25,  # Lehtomainen kangas (OMT) - prime
-    "3": 25,  # Tuore kangas (MT) - prime
-    "4": 12,  # Kuivahko kangas (VT)
-    "5": 5,   # Kuiva kangas (CT)
-    "6": 0,   # Karukkokangas
+    # Weights calibrated against real Cantharellus cibarius sightings from
+    # laji.fi (see scripts/calibrate.py): compared against Karkkila's own
+    # stand population, MT-fertility sightings landed almost exactly at
+    # prevalence (well calibrated already), VT was notably under-weighted
+    # here relative to how often real sightings land there, and OMT was
+    # somewhat over-weighted relative to its (high) prevalence.
+    "1": 17,  # Lehto - lush but often too dense/herby
+    "2": 19,  # Lehtomainen kangas (OMT) - good, but not as dominant as raw prevalence suggests
+    "3": 25,  # Tuore kangas (MT) - prime, matches real sightings almost exactly
+    "4": 18,  # Kuivahko kangas (VT) - real sightings favor this more than expected
+    "5": 10,  # Kuiva kangas (CT)
+    "6": 3,   # Karukkokangas
     "7": 0,   # Kalliomaa ja hietikko
     "8": 0,   # Lakimetsä ja tunturi
 }
 
 DEVELOPMENT_POINTS = {  # developmentclass
-    "02": 15,  # Nuori kasvatusmetsikkö
-    "03": 25,  # Varttunut kasvatusmetsikkö - prime
-    "04": 22,  # Uudistuskypsä metsikkö - prime
+    # Calibrated against laji.fi sightings: the oldest, regeneration-ready
+    # stands (04) were 4x over-represented at real sighting locations
+    # relative to their prevalence -- the strongest single signal in the
+    # calibration -- while 03 (previously tied for best) was slightly
+    # under-represented. 04 is now the top category instead of 03.
+    "02": 10,  # Nuori kasvatusmetsikkö - real sightings avoid this
+    "03": 20,  # Varttunut kasvatusmetsikkö - good, but not the top anymore
+    "04": 25,  # Uudistuskypsä metsikkö - real sightings favor this most
     "05": 15,  # Suojuspuumetsikkö
     "ER": 18,  # Eri-ikäisrakenteinen
     "S0": 5,   # Siemenpuumetsikkö - too open
     "Y1": 5,   # Ylispuustoinen taimikko
-    "T2": 3,   # Taimikko yli 1.3 m - too young
+    "T2": 2,   # Taimikko yli 1.3 m - too young
 }
 EXCLUDED_DEVELOPMENT = {"A0", "T1"}  # Aukea, Taimikko alle 1.3 m
 
@@ -68,16 +79,21 @@ DRAINAGE_MULTIPLIER = {  # drainagestate
 EXCLUDED_SUBGROUP = {"2", "3", "4", "5"}  # Korpi, Räme, Neva, Letto - mire types
 
 SPECIES_WEIGHT = {  # treespecies -> mycorrhizal-partner weight for kantarelli
-    "2": 1.0,   # Kuusi / Norway spruce - main host
-    "3": 0.6,   # Rauduskoivu / silver birch
-    "4": 0.6,   # Hieskoivu / downy birch
-    "29": 0.55, # Lehtipuu / unspecified broadleaf - remote-sensing inventory
-                # frequently can't resolve broadleaf species, and birch is by
-                # far the dominant broadleaf genus in managed southern Finnish
-                # forest, so this generic bucket is treated as birch-like
-                # rather than falling back to the low unknown-species default
-    "1": 0.25,  # Mänty / Scots pine
-    "30": 0.4,  # Havupuu / unspecified conifer - between mänty and kuusi
+    # Calibrated against real laji.fi sightings (scripts/calibrate.py):
+    # Mänty-dominant stands were 2x over-represented at real sighting
+    # locations relative to their prevalence -- pine is a much stronger
+    # chanterelle host here than a low weight would suggest, raised sharply.
+    # Lehtipuu (unspecified broadleaf) was previously raised on the
+    # assumption that unresolved broadleaf is mostly birch, but real
+    # sightings are 10x LESS common there than prevalence would predict --
+    # that assumption doesn't hold up against the data, so it's lowered
+    # back down, below its original default even.
+    "2": 1.0,   # Kuusi / Norway spruce - main host, matches real sightings closely
+    "1": 0.75,  # Mänty / Scots pine - real sightings show this is a strong host too
+    "3": 0.6,   # Rauduskoivu / silver birch (too few sightings to recalibrate)
+    "4": 0.6,   # Hieskoivu / downy birch (too few sightings to recalibrate)
+    "30": 0.4,  # Havupuu / unspecified conifer - no sighting data to calibrate against
+    "29": 0.2,  # Lehtipuu / unspecified broadleaf - real sightings clearly avoid this
 }
 DEFAULT_SPECIES_WEIGHT = 0.1
 
