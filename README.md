@@ -5,6 +5,9 @@ to grow chanterelles (*Cantharellus cibarius*, kantarelli) — built from
 real forest inventory data, not guesswork, and usable straight from your
 phone in the woods.
 
+Karkkila is my home town — I was born there — which is why the map only
+covers this one municipality rather than all of Finland.
+
 **Live map: [kantarelli.juhawilppu.com](https://kantarelli.juhawilppu.com)**
 
 ![Screenshot of the Karkkila kantarelli map, showing green and orange forest stands colored by chanterelle probability, with a popup showing a stand's score and attributes](docs/screenshot.jpg)
