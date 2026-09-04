@@ -167,6 +167,12 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum) -
     df.loc[excluded, "score"] = 0
     df["excluded"] = excluded
 
+    # 0-1 ratios of each factor's contribution relative to its own max (25 for
+    # all three), used to badge individual popup fields on the map
+    df["fertility_ratio"] = (fertility_score / 25).round(2)
+    df["development_ratio"] = (development_score / 25).round(2)
+    df["species_ratio"] = (species_score / 25).round(2)
+
     return gpd.GeoDataFrame(df, geometry="geometry", crs=stand.crs)
 
 
@@ -236,6 +242,7 @@ def to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
     out_cols = [
         "standid", "score", "category", "fertility_label", "development_label",
         "dominant_species", "age", "area_ha", "near_esker", "lat", "lon", "geometry",
+        "fertility_ratio", "development_ratio", "species_ratio",
     ]
     keep = keep[out_cols]
     return json.loads(keep.to_json())
@@ -280,6 +287,10 @@ HTML_TEMPLATE = """<!doctype html>
   .popup-field:last-child { border-bottom: none; }
   .popup-label { display: block; color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
   .popup-value { display: block; margin-top: 2px; }
+  .score-badge { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-left: 7px; vertical-align: middle; }
+  .score-badge.good { background: #1a73e8; }
+  .score-badge.mid { background: #e0a72e; }
+  .score-badge.poor { background: #d64545; }
   .gmaps-btn { display: block; text-align: center; margin-top: 10px; padding: 9px 12px; background: #1a73e8; color: white !important; border-radius: 6px; text-decoration: none; font-size: 15px; font-weight: bold; }
 </style>
 </head>
@@ -308,8 +319,17 @@ function style(feature) {
   };
 }
 
-function popupRow(label, value) {
-  return `<div class="popup-field"><span class="popup-label">${label}</span><span class="popup-value">${value}</span></div>`;
+// ratio is this field's contribution to the score, 0-1 relative to its own
+// max -- null means "not a scored factor" (Ikä/Ala), so no badge is shown
+function scoreBadge(ratio) {
+  if (ratio == null) return "";
+  const tier = ratio >= 0.65 ? "good" : ratio >= 0.3 ? "mid" : "poor";
+  return `<span class="score-badge ${tier}" title="Vaikutus pisteisiin: ${tier}"></span>`;
+}
+
+function popupRow(label, value, ratio) {
+  return `<div class="popup-field"><span class="popup-label">${label}</span>` +
+    `<span class="popup-value">${value}${scoreBadge(ratio)}</span></div>`;
 }
 
 // Finland uses "," as the decimal separator
@@ -320,13 +340,13 @@ function fiNum(n) {
 function onEachFeature(feature, layer) {
   const p = feature.properties;
   const rows = [
-    popupRow("Kasvupaikka", p.fertility_label),
-    popupRow("Kehitysluokka", p.development_label),
-    popupRow("Vallitseva puulaji", p.dominant_species),
+    popupRow("Kasvupaikka", p.fertility_label, p.fertility_ratio),
+    popupRow("Kehitysluokka", p.development_label, p.development_ratio),
+    popupRow("Vallitseva puulaji", p.dominant_species, p.species_ratio),
     popupRow("Ikä", `${p.age ?? "?"} v`),
     popupRow("Ala", `${fiNum(p.area_ha)} ha`),
   ];
-  if (p.near_esker) rows.push(popupRow("Sijainti", "Lähellä harju-/reunamuodostumaa"));
+  if (p.near_esker) rows.push(popupRow("Sijainti", "Lähellä harju-/reunamuodostumaa", 1));
 
   layer.bindPopup(
     `<div class="popup-header" style="background:${COLORS[p.category] || "#666"}">` +
