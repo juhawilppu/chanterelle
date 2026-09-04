@@ -220,6 +220,7 @@ HTML_TEMPLATE = """<!doctype html>
   #map { height: 100%; }
   .legend { background: white; padding: 8px 12px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.4); font-size: 13px; line-height: 1.5; }
   .legend span { display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: middle; border-radius: 3px; }
+  .my-location-dot { width: 16px; height: 16px; border-radius: 50%; background: #1a73e8; border: 2px solid white; box-shadow: 0 0 0 2px rgba(26,115,232,.5); }
 </style>
 </head>
 <body>
@@ -291,6 +292,45 @@ legend.onAdd = function () {
   return div;
 };
 legend.addTo(map);
+
+// Live location: read the browser's geolocation and refresh a "you are here"
+// dot every 30s. file:// and localhost both count as secure contexts, so
+// this works when the map is opened straight from disk.
+const LOCATION_REFRESH_MS = 30000;
+let locationMarker = null;
+let accuracyCircle = null;
+let firstFix = true;
+
+function updateLocation() {
+  if (!("geolocation" in navigator)) {
+    console.warn("Geolocation not supported by this browser.");
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const latlng = [pos.coords.latitude, pos.coords.longitude];
+      if (!locationMarker) {
+        locationMarker = L.marker(latlng, {
+          icon: L.divIcon({ className: "", html: '<div class="my-location-dot"></div>', iconSize: [16, 16] }),
+          zIndexOffset: 1000,
+        }).addTo(map).bindPopup("Nykyinen sijainti");
+        accuracyCircle = L.circle(latlng, { radius: pos.coords.accuracy, color: "#1a73e8", weight: 1, fillOpacity: 0.1 }).addTo(map);
+      } else {
+        locationMarker.setLatLng(latlng);
+        accuracyCircle.setLatLng(latlng).setRadius(pos.coords.accuracy);
+      }
+      if (firstFix) {
+        map.setView(latlng, 15);
+        firstFix = false;
+      }
+    },
+    (err) => console.warn("Sijainnin haku epaonnistui:", err.message),
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+  );
+}
+
+updateLocation();
+setInterval(updateLocation, LOCATION_REFRESH_MS);
 </script>
 </body>
 </html>
