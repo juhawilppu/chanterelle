@@ -192,7 +192,9 @@ LABELS = {
 
 
 def to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
-    keep = gdf[~gdf["excluded"]].copy()
+    # the map only ever shows "high"/"medium" (no user toggle for "low"), so
+    # there's no reason to ship "low" stands to the client at all
+    keep = gdf[gdf["category"].isin(["high", "medium"])].copy()
 
     # centroid computed in the planar CRS (before simplify/reproject) so it's a
     # true geometric centroid, used as the Google Maps navigation destination
@@ -225,10 +227,12 @@ HTML_TEMPLATE = """<!doctype html>
 <style>
   html, body { margin: 0; height: 100%; font-family: sans-serif; }
   #map { height: 100%; }
-  .legend { background: white; padding: 8px 12px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.4); font-size: 13px; line-height: 1.5; }
-  .legend span { display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: middle; border-radius: 3px; }
+  .legend { background: white; padding: 10px 14px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.4); font-size: 16px; line-height: 1.5; }
+  .legend span { display: inline-block; width: 16px; height: 16px; margin-right: 6px; vertical-align: middle; border-radius: 3px; }
+  .legend small { font-size: 13px; }
   .my-location-dot { width: 16px; height: 16px; border-radius: 50%; background: #1a73e8; border: 2px solid white; box-shadow: 0 0 0 2px rgba(26,115,232,.5); }
-  .gmaps-btn { display: inline-block; margin-top: 8px; padding: 5px 10px; background: #1a73e8; color: white !important; border-radius: 4px; text-decoration: none; font-size: 12px; }
+  .gmaps-btn { display: inline-block; margin-top: 8px; padding: 7px 12px; background: #1a73e8; color: white !important; border-radius: 4px; text-decoration: none; font-size: 15px; }
+  .leaflet-popup-content { font-size: 16px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -237,7 +241,7 @@ HTML_TEMPLATE = """<!doctype html>
 <script>
 const STANDS = __GEOJSON__;
 
-const COLORS = { high: "#1a7a2e", medium: "#d9a441", low: "#9a9a9a" };
+const COLORS = { high: "#1a7a2e", medium: "#d9a441" };
 
 const map = L.map('map', { preferCanvas: true });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -251,7 +255,7 @@ function style(feature) {
     color: COLORS[cat] || "#999",
     weight: feature.properties.near_esker ? 2 : 1,
     fillColor: COLORS[cat] || "#999",
-    fillOpacity: cat === "high" ? 0.55 : cat === "medium" ? 0.35 : 0.15,
+    fillOpacity: cat === "high" ? 0.55 : 0.35,
   };
 }
 
@@ -270,25 +274,9 @@ function onEachFeature(feature, layer) {
   );
 }
 
+// no layer toggle: STANDS already only contains "high"/"medium" stands
 const layer = L.geoJSON(STANDS, { style, onEachFeature }).addTo(map);
 map.fitBounds(layer.getBounds());
-
-const overlays = {
-  "Korkea todennäköisyys": L.geoJSON(STANDS, {
-    filter: f => f.properties.category === "high", style, onEachFeature,
-  }),
-  "Kohtalainen todennäköisyys": L.geoJSON(STANDS, {
-    filter: f => f.properties.category === "medium", style, onEachFeature,
-  }),
-  "Matala todennäköisyys": L.geoJSON(STANDS, {
-    filter: f => f.properties.category === "low", style, onEachFeature,
-  }),
-};
-// swap the combined layer for the three toggleable ones; "low" starts hidden to keep the map readable
-map.removeLayer(layer);
-overlays["Korkea todennäköisyys"].addTo(map);
-overlays["Kohtalainen todennäköisyys"].addTo(map);
-L.control.layers(null, overlays, { collapsed: false }).addTo(map);
 
 const legend = L.control({ position: "bottomright" });
 legend.onAdd = function () {
@@ -297,7 +285,6 @@ legend.onAdd = function () {
     "<b>Kantarelli-todennäköisyys</b><br>" +
     `<span style="background:${COLORS.high}"></span> Korkea<br>` +
     `<span style="background:${COLORS.medium}"></span> Kohtalainen<br>` +
-    `<span style="background:${COLORS.low}"></span> Matala<br>` +
     "Paksumpi reunaviiva = lähellä harjumuodostumaa<br>" +
     "<small>Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) perustuva arvio - ei mittaustietoa itiöemistä.</small>";
   return div;
