@@ -71,13 +71,20 @@ SPECIES_WEIGHT = {  # treespecies -> mycorrhizal-partner weight for kantarelli
     "2": 1.0,   # Kuusi / Norway spruce - main host
     "3": 0.6,   # Rauduskoivu / silver birch
     "4": 0.6,   # Hieskoivu / downy birch
+    "29": 0.55, # Lehtipuu / unspecified broadleaf - remote-sensing inventory
+                # frequently can't resolve broadleaf species, and birch is by
+                # far the dominant broadleaf genus in managed southern Finnish
+                # forest, so this generic bucket is treated as birch-like
+                # rather than falling back to the low unknown-species default
     "1": 0.25,  # Mänty / Scots pine
+    "30": 0.4,  # Havupuu / unspecified conifer - between mänty and kuusi
 }
 DEFAULT_SPECIES_WEIGHT = 0.1
 
 TREESPECIES_LABELS = {
     "1": "Mänty", "2": "Kuusi", "3": "Rauduskoivu", "4": "Hieskoivu",
     "5": "Haapa", "6": "Harmaaleppä", "7": "Tervaleppä",
+    "29": "Lehtipuu", "30": "Havupuu",
 }
 
 
