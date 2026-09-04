@@ -228,12 +228,30 @@ HTML_TEMPLATE = """<!doctype html>
 <style>
   html, body { margin: 0; height: 100%; font-family: sans-serif; }
   #map { height: 100%; }
-  .legend { background: white; padding: 10px 14px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.4); font-size: 16px; line-height: 1.5; }
+
+  .legend { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 1000;
+            background: white; padding: 10px 30px 10px 14px; border-radius: 10px; box-shadow: 0 1px 6px rgba(0,0,0,.4);
+            font-size: 16px; line-height: 1.5; max-width: 90vw; }
   .legend span { display: inline-block; width: 16px; height: 16px; margin-right: 6px; vertical-align: middle; border-radius: 3px; }
-  .legend small { font-size: 13px; }
+  .legend small { font-size: 13px; color: #444; }
+  .legend-close { position: absolute; top: 4px; right: 6px; width: 28px; height: 28px; border: none; background: none;
+                  font-size: 20px; line-height: 28px; color: #888; cursor: pointer; }
+  .legend-open { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 1000;
+                 width: 40px; height: 40px; border-radius: 50%; border: none; background: white; box-shadow: 0 1px 6px rgba(0,0,0,.4);
+                 font-size: 18px; cursor: pointer; }
+
   .my-location-dot { width: 16px; height: 16px; border-radius: 50%; background: #1a73e8; border: 2px solid white; box-shadow: 0 0 0 2px rgba(26,115,232,.5); }
-  .gmaps-btn { display: inline-block; margin-top: 8px; padding: 7px 12px; background: #1a73e8; color: white !important; border-radius: 4px; text-decoration: none; font-size: 15px; }
-  .leaflet-popup-content { font-size: 16px; line-height: 1.5; }
+
+  .leaflet-popup-content-wrapper { padding: 0; border-radius: 12px; overflow: hidden; }
+  .leaflet-popup-content { margin: 0; font-size: 16px; line-height: 1.5; min-width: 230px; }
+  .leaflet-popup-close-button { font-size: 24px !important; width: 32px !important; height: 32px !important; line-height: 32px !important; }
+  .popup-header { padding: 10px 16px; color: white !important; display: flex; justify-content: space-between; align-items: baseline; }
+  .popup-header .popup-score { font-size: 20px; font-weight: bold; }
+  .popup-body { padding: 10px 16px; }
+  .popup-row { display: flex; justify-content: space-between; gap: 14px; padding: 4px 0; border-bottom: 1px solid #eee; }
+  .popup-row:last-child { border-bottom: none; }
+  .popup-label { color: #777; }
+  .gmaps-btn { display: block; text-align: center; margin-top: 10px; padding: 9px 12px; background: #1a73e8; color: white !important; border-radius: 6px; text-decoration: none; font-size: 15px; font-weight: bold; }
 </style>
 </head>
 <body>
@@ -243,6 +261,7 @@ HTML_TEMPLATE = """<!doctype html>
 const STANDS = __GEOJSON__;
 
 const COLORS = { high: "#1a7a2e", medium: "#d9a441" };
+const CATEGORY_LABELS = { high: "Korkea", medium: "Kohtalainen" };
 
 const map = L.map('map', { preferCanvas: true, zoomControl: false });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -260,18 +279,33 @@ function style(feature) {
   };
 }
 
+function popupRow(label, value) {
+  return `<div class="popup-row"><span class="popup-label">${label}</span><span>${value}</span></div>`;
+}
+
 function onEachFeature(feature, layer) {
   const p = feature.properties;
+  const rows = [
+    popupRow("Kasvupaikka", p.fertility_label),
+    popupRow("Kehitysluokka", p.development_label),
+    popupRow("Vallitseva puulaji", p.dominant_species),
+    popupRow("Ikä", `${p.age ?? "?"} v`),
+    popupRow("Ala", `${p.area_ha} ha`),
+  ];
+  if (p.near_esker) rows.push(popupRow("Sijainti", "Lähellä harju-/reunamuodostumaa"));
+
   layer.bindPopup(
-    `<b>Pisteet: ${p.score} / 100 (${p.category})</b><br>` +
-    `Kasvupaikka: ${p.fertility_label}<br>` +
-    `Kehitysluokka: ${p.development_label}<br>` +
-    `Vallitseva puulaji: ${p.dominant_species}<br>` +
-    `Ikä: ${p.age ?? "?"} v, Ala: ${p.area_ha} ha` +
-    (p.near_esker ? "<br>Lähellä harju-/reunamuodostumaa" : "") +
-    `<br><a class="gmaps-btn" target="_blank" rel="noopener" ` +
+    `<div class="popup-header" style="background:${COLORS[p.category] || "#666"}">` +
+    `<span>${CATEGORY_LABELS[p.category] || p.category}</span>` +
+    `<span class="popup-score">${p.score}/100</span>` +
+    `</div>` +
+    `<div class="popup-body">` +
+    rows.join("") +
+    `<a class="gmaps-btn" target="_blank" rel="noopener" ` +
     `href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}&travelmode=driving">` +
-    `Navigoi tänne (Google Maps)</a>`
+    `Navigoi tänne (Google Maps)</a>` +
+    `</div>`,
+    { minWidth: 230 }
   );
 }
 
@@ -279,18 +313,32 @@ function onEachFeature(feature, layer) {
 const layer = L.geoJSON(STANDS, { style, onEachFeature }).addTo(map);
 map.fitBounds(layer.getBounds());
 
-const legend = L.control({ position: "bottomright" });
-legend.onAdd = function () {
-  const div = L.DomUtil.create("div", "legend");
-  div.innerHTML =
-    "<b>Kantarelli-todennäköisyys</b><br>" +
-    `<span style="background:${COLORS.high}"></span> Korkea<br>` +
-    `<span style="background:${COLORS.medium}"></span> Kohtalainen<br>` +
-    "Paksumpi reunaviiva = lähellä harjumuodostumaa<br>" +
-    "<small>Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) perustuva arvio - ei mittaustietoa itiöemistä.</small>";
-  return div;
-};
-legend.addTo(map);
+const legend = document.createElement("div");
+legend.className = "legend";
+legend.innerHTML =
+  '<button class="legend-close" aria-label="Piilota selite">×</button>' +
+  "<b>Kantarelli-todennäköisyys</b><br>" +
+  `<span style="background:${COLORS.high}"></span> Korkea<br>` +
+  `<span style="background:${COLORS.medium}"></span> Kohtalainen<br>` +
+  "Paksumpi reunaviiva = lähellä harjumuodostumaa<br>" +
+  "<small>Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) perustuva arvio - ei mittaustietoa itiöemistä.</small>";
+document.body.appendChild(legend);
+
+const legendOpenBtn = document.createElement("button");
+legendOpenBtn.className = "legend-open";
+legendOpenBtn.setAttribute("aria-label", "Näytä selite");
+legendOpenBtn.textContent = "i";
+legendOpenBtn.hidden = true;
+document.body.appendChild(legendOpenBtn);
+
+legend.querySelector(".legend-close").addEventListener("click", () => {
+  legend.hidden = true;
+  legendOpenBtn.hidden = false;
+});
+legendOpenBtn.addEventListener("click", () => {
+  legend.hidden = false;
+  legendOpenBtn.hidden = true;
+});
 
 // Live location: read the browser's geolocation and refresh a "you are here"
 // dot every 30s. file:// and localhost both count as secure contexts, so
