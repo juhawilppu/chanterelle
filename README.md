@@ -31,36 +31,6 @@ chanterelle sightings — treat it as "worth checking," not a guarantee.
 And a reminder: mushroom picking is covered by *jokamiehenoikeus*
 (everyman's right) everywhere shown, regardless of who owns the land.
 
-## Built with AI
-
-This entire project — the idea, the data pipeline, the scoring model, the
-map, and the deployment — was built in conversation with [Claude
-Code](https://claude.com/claude-code), and I want to be upfront and a
-little proud about that rather than bury it. Concretely, that meant:
-
-- Researching and wiring up two real open-data sources (Suomen
-  metsäkeskus's forest stand data, GTK's geological formation data),
-  including working around a dataset that turned out to have no coverage
-  for Karkkila and swapping in a better one
-- Designing the habitat scoring model from actual chanterelle ecology,
-  then noticing the first version wasn't discriminating (70% of stands
-  scored "high") and fixing it with relative ranking instead of fixed
-  thresholds
-- Debugging a real templating bug that broke the generated map, verified
-  by actually loading the page in a browser and checking the console —
-  not just assuming the code was right
-- Standing up the whole toolchain from a fairly bare Mac (ancient system
-  Python, a stale Homebrew, an outdated Xcode) to a working geospatial
-  Python environment, Node, and the Cloudflare `wrangler` CLI
-- Deploying it to Cloudflare Pages on a custom subdomain, including
-  diagnosing a production-vs-preview branch mismatch that was causing a
-  404
-
-I reviewed and steered all of it, but the code, the debugging, and most
-of this README were written by Claude. If that's interesting to you as a
-demonstration of what's possible, that's a nice bonus on top of a map
-that (hopefully) finds you some mushrooms.
-
 ## Data sources
 
 - [Suomen metsäkeskus](https://www.metsakeskus.fi/fi/avoin-metsa-ja-luontotieto) —
@@ -91,25 +61,3 @@ Open `output/karkkila_kantarelli_map.html` directly in a browser.
 
 To target a different municipality, change `MUNICIPALITY` at the top of
 both scripts and rerun.
-
-## Commit messages
-
-This repo uses [Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-<type>(<scope>): <short summary>
-```
-
-Common types here:
-
-- `feat` — a new capability (e.g. a new scoring factor, a new output format)
-- `fix` — correcting a bug in the scoring or map generation
-- `data` — changes related to source data (refreshing a download, adding a dataset)
-- `docs` — README/comments only
-- `refactor` — code restructuring with no behavior change
-- `chore` — tooling, dependencies, `.gitignore`, etc.
-
-Scope is optional and usually the script or area affected, e.g.
-`fix(scoring): correct esker buffer distance` or `data: refresh Karkkila stand download`.
-Keep the summary imperative and under ~72 characters; add a body paragraph
-below a blank line when the "why" needs more explanation.
