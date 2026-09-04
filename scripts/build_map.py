@@ -76,8 +76,8 @@ SPECIES_WEIGHT = {  # treespecies -> mycorrhizal-partner weight for kantarelli
 DEFAULT_SPECIES_WEIGHT = 0.1
 
 TREESPECIES_LABELS = {
-    "1": "mänty", "2": "kuusi", "3": "rauduskoivu", "4": "hieskoivu",
-    "5": "haapa", "6": "harmaaleppä", "7": "tervaleppä",
+    "1": "Mänty", "2": "Kuusi", "3": "Rauduskoivu", "4": "Hieskoivu",
+    "5": "Haapa", "6": "Harmaaleppä", "7": "Tervaleppä",
 }
 
 
@@ -110,7 +110,7 @@ def compute_species_mix(treestand: pd.DataFrame, treestratum: pd.DataFrame) -> p
 
     dominant_idx = tt.groupby("treestandid")["basalarea"].idxmax()
     dominant = tt.loc[dominant_idx, ["treestandid", "treespecies"]].set_index("treestandid")
-    dominant["dominant_species"] = dominant["treespecies"].map(TREESPECIES_LABELS).fillna("muu")
+    dominant["dominant_species"] = dominant["treespecies"].map(TREESPECIES_LABELS).fillna("Muu")
 
     mix = pd.concat([totals, weighted], axis=1).join(dominant["dominant_species"])
     mix["species_fraction"] = (mix["weighted_ba"] / mix["total_ba"]).clip(upper=1).fillna(0)
@@ -233,7 +233,8 @@ HTML_TEMPLATE = """<!doctype html>
             background: white; box-shadow: 0 -1px 6px rgba(0,0,0,.3);
             padding: 10px 40px calc(10px + env(safe-area-inset-bottom, 0px)) 14px;
             font-size: 16px; line-height: 1.4; }
-  .legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+  .legend b { display: block; }
+  .legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-top: 4px; }
   .legend span.swatch { display: inline-block; width: 14px; height: 14px; margin-right: 4px; vertical-align: middle; border-radius: 3px; }
   .legend small { display: block; margin-top: 4px; font-size: 13px; color: #444; }
   .legend-close { position: absolute; top: 6px; right: 8px; width: 28px; height: 28px; border: none; background: none;
@@ -288,6 +289,11 @@ function popupRow(label, value) {
   return `<div class="popup-field"><span class="popup-label">${label}</span><span class="popup-value">${value}</span></div>`;
 }
 
+// Finland uses "," as the decimal separator
+function fiNum(n) {
+  return String(n).replace(".", ",");
+}
+
 function onEachFeature(feature, layer) {
   const p = feature.properties;
   const rows = [
@@ -295,14 +301,14 @@ function onEachFeature(feature, layer) {
     popupRow("Kehitysluokka", p.development_label),
     popupRow("Vallitseva puulaji", p.dominant_species),
     popupRow("Ikä", `${p.age ?? "?"} v`),
-    popupRow("Ala", `${p.area_ha} ha`),
+    popupRow("Ala", `${fiNum(p.area_ha)} ha`),
   ];
   if (p.near_esker) rows.push(popupRow("Sijainti", "Lähellä harju-/reunamuodostumaa"));
 
   layer.bindPopup(
     `<div class="popup-header" style="background:${COLORS[p.category] || "#666"}">` +
     `<span>${CATEGORY_LABELS[p.category] || p.category}</span>` +
-    `<span class="popup-score">${p.score}/100</span>` +
+    `<span class="popup-score">${fiNum(p.score)}/100</span>` +
     `</div>` +
     `<div class="popup-body">` +
     rows.join("") +
@@ -322,8 +328,8 @@ const legend = document.createElement("div");
 legend.className = "legend";
 legend.innerHTML =
   '<button class="legend-close" aria-label="Piilota selite">×</button>' +
+  "<b>Kantarelli-todennäköisyys</b>" +
   '<div class="legend-row">' +
-  "<b>Kantarelli-todennäköisyys:</b>" +
   `<span><span class="swatch" style="background:${COLORS.high}"></span>Korkea</span>` +
   `<span><span class="swatch" style="background:${COLORS.medium}"></span>Kohtalainen</span>` +
   "<span>Paksu reuna = lähellä harjumuodostumaa</span>" +
