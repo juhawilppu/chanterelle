@@ -16,21 +16,24 @@
   .legend small { font-size: 13px; color: #444; }
   .legend-close { position: absolute; top: 4px; right: 6px; width: 28px; height: 28px; border: none; background: none;
                   font-size: 20px; line-height: 28px; color: #888; cursor: pointer; }
-  .legend-open { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 1000;
-                 width: 40px; height: 40px; border-radius: 50%; border: none; background: white; box-shadow: 0 1px 6px rgba(0,0,0,.4);
-                 font-size: 18px; cursor: pointer; }
 
   .my-location-dot { width: 16px; height: 16px; border-radius: 50%; background: #1a73e8; border: 2px solid white; box-shadow: 0 0 0 2px rgba(26,115,232,.5); }
 
   .leaflet-popup-content-wrapper { padding: 0; border-radius: 12px; overflow: hidden; }
   .leaflet-popup-content { margin: 0; font-size: 16px; line-height: 1.5; min-width: 230px; }
-  .leaflet-popup-close-button { font-size: 24px !important; width: 32px !important; height: 32px !important; line-height: 32px !important; }
-  .popup-header { padding: 10px 16px; color: white !important; display: flex; justify-content: space-between; align-items: baseline; }
+  .leaflet-popup-close-button {
+    color: white !important; background: rgba(0,0,0,.2); border-radius: 50%;
+    top: 8px !important; right: 8px !important; font-size: 20px !important;
+    width: 26px !important; height: 26px !important; line-height: 24px !important; text-align: center;
+  }
+  .leaflet-popup-close-button:hover { background: rgba(0,0,0,.35); color: white !important; }
+  .popup-header { padding: 12px 40px 12px 16px; color: white !important; display: flex; justify-content: space-between; align-items: baseline; }
   .popup-header .popup-score { font-size: 20px; font-weight: bold; }
   .popup-body { padding: 10px 16px; }
-  .popup-row { display: flex; justify-content: space-between; gap: 14px; padding: 4px 0; border-bottom: 1px solid #eee; }
-  .popup-row:last-child { border-bottom: none; }
-  .popup-label { color: #777; }
+  .popup-field { padding: 7px 0; border-bottom: 1px solid #eee; }
+  .popup-field:last-child { border-bottom: none; }
+  .popup-label { display: block; color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .popup-value { display: block; margin-top: 2px; }
   .gmaps-btn { display: block; text-align: center; margin-top: 10px; padding: 9px 12px; background: #1a73e8; color: white !important; border-radius: 6px; text-decoration: none; font-size: 15px; font-weight: bold; }
 </style>
 </head>
@@ -60,7 +63,7 @@ function style(feature) {
 }
 
 function popupRow(label, value) {
-  return `<div class="popup-row"><span class="popup-label">${label}</span><span>${value}</span></div>`;
+  return `<div class="popup-field"><span class="popup-label">${label}</span><span class="popup-value">${value}</span></div>`;
 }
 
 function onEachFeature(feature, layer) {
@@ -104,20 +107,10 @@ legend.innerHTML =
   "<small>Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) perustuva arvio - ei mittaustietoa itiöemistä.</small>";
 document.body.appendChild(legend);
 
-const legendOpenBtn = document.createElement("button");
-legendOpenBtn.className = "legend-open";
-legendOpenBtn.setAttribute("aria-label", "Näytä selite");
-legendOpenBtn.textContent = "i";
-legendOpenBtn.hidden = true;
-document.body.appendChild(legendOpenBtn);
-
+// closing hides it for the rest of this page view; no reopen button, since a
+// floating "reopen" button ended up sitting awkwardly over the map itself
 legend.querySelector(".legend-close").addEventListener("click", () => {
   legend.hidden = true;
-  legendOpenBtn.hidden = false;
-});
-legendOpenBtn.addEventListener("click", () => {
-  legend.hidden = false;
-  legendOpenBtn.hidden = true;
 });
 
 // Live location: read the browser's geolocation and refresh a "you are here"
