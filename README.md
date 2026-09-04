@@ -7,9 +7,8 @@ phone in the woods.
 
 Karkkila is my home town. I've spent years walking those forests looking
 for kantarelli and have never once come home with enough to actually
-cook — so this is a fix. Not the kind you `git commit`, but close enough.
-It's also why the map only covers this one municipality instead of all
-of Finland.
+cook, so this is my fix for that. It's also why the map only covers this
+one municipality instead of all of Finland.
 
 **Live map: [kantarelli.juhawilppu.com](https://kantarelli.juhawilppu.com)**
 
