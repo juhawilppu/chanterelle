@@ -5,8 +5,11 @@ to grow chanterelles (*Cantharellus cibarius*, kantarelli) — built from
 real forest inventory data, not guesswork, and usable straight from your
 phone in the woods.
 
-Karkkila is my home town — I was born there — which is why the map only
-covers this one municipality rather than all of Finland.
+Karkkila is my home town. I've spent years walking those forests looking
+for kantarelli and have never once come home with enough to actually
+cook — so this is a fix. Not the kind you `git commit`, but close enough.
+It's also why the map only covers this one municipality instead of all
+of Finland.
 
 **Live map: [kantarelli.juhawilppu.com](https://kantarelli.juhawilppu.com)**
 
@@ -14,11 +17,11 @@ covers this one municipality rather than all of Finland.
 
 ## What it does
 
-Chanterelles are picky about where they grow: they partner mycorrhizally
-mostly with spruce, favour mesic to herb-rich heath forest, mid-aged to
-mature stands with enough light for moss to carpet the floor, well-drained
-soil, and often turn up near eskers. Those aren't vibes — they're
-attributes that Finland's forest inventories actually record per stand.
+Chanterelles are picky about where they grow: mostly under spruce, in
+moss-floored forest that's mid-aged to mature and not too dark or too
+wet, on well-drained soil, often near eskers. Those aren't vibes —
+they're attributes that Finland's forest inventories actually record per
+stand.
 
 This project pulls that data for every one of Karkkila's ~13,000 forest
 stands, scores each one against those habitat correlates, ranks them
