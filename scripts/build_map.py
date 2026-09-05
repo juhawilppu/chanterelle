@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 
 MUNICIPALITY = "Karkkila"
@@ -69,6 +70,7 @@ SOIL_POINTS = {  # soiltype, coarse/well-drained mineral soils score best
     "10": 15, "11": 15, "12": 15, "30": 14, "31": 14, "32": 14,
     "20": 9, "21": 9, "22": 9, "23": 8, "24": 7, "40": 8,
     "50": 8,
+    "70": 7,  # Multamaa - organic-rich, holds moisture, middling for kantarelli
 }
 
 DRAINAGE_MULTIPLIER = {  # drainagestate
@@ -78,6 +80,40 @@ DRAINAGE_MULTIPLIER = {  # drainagestate
 }
 
 EXCLUDED_SUBGROUP = {"2", "3", "4", "5"}  # Korpi, Räme, Neva, Letto - mire types
+
+# Canopy openness ("valoisuus") response to stem density, as a piecewise-linear
+# curve calibrated against stem counts at real laji.fi sighting locations:
+# too sparse = no living mycorrhizal host, too dense = no light on the floor.
+LIGHT_STEMCOUNT_KNOTS = [0, 100, 400, 800, 2000]
+LIGHT_OPENNESS_KNOTS = [0.25, 0.25, 1.0, 1.0, 0.0]
+# Single source of truth for "this factor is green". Used both by the
+# "Excellent" rule (every factor green) and injected into the map's JS for the
+# popup badges, so the category and the dots can never disagree -- they did
+# once, and a stand showing a yellow dot still counted as all-green.
+GREEN_THRESHOLDS = {
+    "fertility": 0.65,
+    "development": 0.65,
+    "species": 0.65,
+    "mixture": 0.55,   # Gini-Simpson tops out near 0.67 in practice
+    "light": 0.75,     # roughly 325-1100 stems/ha, the empirically enriched band
+    "soil": 0.65,
+}
+MID_THRESHOLD = 0.3
+LIGHT_GOOD_THRESHOLD = GREEN_THRESHOLDS["light"]
+LIGHT_MID_THRESHOLD = MID_THRESHOLD
+
+# Point budget per factor. Kept explicit so the "x/100" shown on the map stays
+# honest when factors are added or reweighted.
+ESKER_BONUS_POINTS = 10
+MAX_RAW_SCORE = (
+    25   # fertility (kasvupaikka)
+    + 25  # development class (kehitysluokka)
+    + 10  # species host quality
+    + 15  # sekametsä mixture
+    + 15  # soil x drainage
+    + 10  # valoisuus (canopy openness)
+    + ESKER_BONUS_POINTS
+)
 
 SPECIES_WEIGHT = {  # treespecies -> mycorrhizal-partner weight for kantarelli
     # Calibrated against real laji.fi sightings (scripts/calibrate.py):
@@ -114,8 +150,12 @@ def load_layers():
     treestand = treestand[treestand["treestandclass"] == CURRENT_TREESTAND_CLASS][
         ["treestandid", "standid", "developmentclass"]
     ]
+    # stemcount (stems/ha) is used as the canopy-openness ("valoisuus") proxy:
+    # a stand can have high basal area from a few big old trees (open, light)
+    # or the same basal area from many small crowded ones (dark) -- stem
+    # density tells those apart, basal area alone does not
     treestandsummary = gpd.read_file(GPKG_PATH, layer="treestandsummary")[
-        ["treestandid", "age"]
+        ["treestandid", "stemcount"]
     ]
     treestratum = gpd.read_file(GPKG_PATH, layer="treestratum")[
         ["treestandid", "treespecies", "basalarea"]
@@ -176,9 +216,25 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum) -
     # emphasize genuinely mixed forest over a monoculture of the "best" species.
     species_quality_score = 10 * df["species_fraction"].fillna(0.3)
     mixture_score = 15 * df["diversity_index"].fillna(0)
+    # "valoisuus" (light reaching the forest floor): repeatedly cited as
+    # important in foraging sources ("avoid dense dark forest"), but not
+    # captured by development class alone -- a stand can have high basal
+    # area from a few big old trees (open) or many small crowded ones
+    # (dark) at the same age. Stem density is the proxy, and it peaks in a
+    # BAND rather than rising as trees disappear: calibrated against real
+    # laji.fi sightings, 74% fall in 300-800 stems/ha (vs 44% of background),
+    # dropping off sharply above 800 and effectively absent below 300. A
+    # nearly treeless seed-tree stand has plenty of light but no living
+    # mycorrhizal host, so it must not score as "maximally light".
+    openness = pd.Series(
+        np.interp(df["stemcount"], LIGHT_STEMCOUNT_KNOTS, LIGHT_OPENNESS_KNOTS),
+        index=df.index,
+    ).where(df["stemcount"].notna())
+    light_score = 10 * openness.fillna(0.4)
 
     df["score"] = (
-        fertility_score + development_score + species_quality_score + mixture_score + soil_score
+        fertility_score + development_score + species_quality_score
+        + mixture_score + soil_score + light_score
     ).round(1)
     df.loc[excluded, "score"] = 0
     df["excluded"] = excluded
@@ -191,22 +247,35 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum) -
     df["species_ratio"] = (species_quality_score / 10).round(2)
     df["mixture_ratio"] = df["diversity_index"].round(2)
     df["soil_ratio"] = (soil_score / 15).round(2)
+    df["light_ratio"] = (light_score / 10).round(2)
 
     return gpd.GeoDataFrame(df, geometry="geometry", crs=stand.crs)
 
 
 def categorize(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Rank non-excluded stands against each other rather than using fixed
+    """"Excellent" is a hard rule, not a percentile: every single badged
+    factor has to be green (its own "good" threshold, matching what the
+    popup actually shows), so an "Excellent" stand is explainable purely by
+    "look, everything is green" -- no exceptions or partial credit.
+
+    Everything else ranks against everything else rather than using fixed
     score thresholds: Karkkila's forest land is overwhelmingly mesic,
     coarse-mineral-soil spruce/mixed forest, so the raw weighted score
-    clusters densely in the 70-90 range and a fixed cutoff would flag most
-    of the municipality as "high". Relative ranking keeps the map useful
-    for actually choosing where to go.
+    clusters densely and a fixed cutoff would flag most of the municipality
+    as "high". Relative ranking keeps the map useful for choosing where to go.
     """
     gdf["category"] = "excluded"
     non_excluded = ~gdf["excluded"]
-    ranked = gdf.loc[non_excluded, "score"].rank(pct=True)
-    gdf.loc[non_excluded, "category"] = pd.cut(
+
+    all_green = gdf["near_esker"].copy()
+    for factor, threshold in GREEN_THRESHOLDS.items():
+        all_green &= gdf[f"{factor}_ratio"] >= threshold
+    excellent = non_excluded & all_green
+    gdf.loc[excellent, "category"] = "excellent"
+
+    rest = non_excluded & ~excellent
+    ranked = gdf.loc[rest, "score"].rank(pct=True)
+    gdf.loc[rest, "category"] = pd.cut(
         ranked, bins=[0, 0.5, 0.85, 1.0], labels=["low", "medium", "high"], include_lowest=True
     )
     return gdf
@@ -221,7 +290,21 @@ def add_esker_bonus(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     centroids = gdf.geometry.centroid
     gdf["near_esker"] = centroids.within(buffered)
     bonus = gdf["near_esker"] & (~gdf["excluded"])
-    gdf.loc[bonus, "score"] = (gdf.loc[bonus, "score"] + 10).clip(upper=100)
+    gdf.loc[bonus, "score"] = gdf.loc[bonus, "score"] + ESKER_BONUS_POINTS
+    return gdf
+
+
+def normalize_scores(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Rescale the raw point total onto a true 0-100 scale.
+
+    The esker bonus used to be added and then clipped at 100, which silently
+    penalised exactly the best stands: once the other factors already summed
+    near the 100-point maximum, part of the +10 was thrown away, so an
+    excellent stand near an esker got less credit for it than a mediocre one.
+    Dividing by the real theoretical maximum keeps every factor's calibrated
+    weight intact and keeps the displayed "x/100" honest.
+    """
+    gdf["score"] = (gdf["score"] / MAX_RAW_SCORE * 100).round(1)
     return gdf
 
 
@@ -257,10 +340,24 @@ def mixture_label(diversity_index: float) -> str:
     return "Lähes yksipuulajinen"
 
 
+def light_label(light_ratio: float, stemcount: float) -> str:
+    """Openness peaks in a band, so a low ratio means one of two opposite
+    things: too few trees or too many. The label has to say which, or a
+    nearly treeless stand would read as "dense, little light".
+    """
+    if light_ratio >= LIGHT_GOOD_THRESHOLD:
+        return "Avoin, valoisa"
+    if pd.notna(stemcount) and stemcount < LIGHT_STEMCOUNT_KNOTS[2]:
+        return "Hyvin harva puusto"  # too open: little living host left
+    if light_ratio >= LIGHT_MID_THRESHOLD:
+        return "Melko tiheä"
+    return "Tiheä, vähän valoa"
+
+
 def to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
     # the map only ever shows "high"/"medium" (no user toggle for "low"), so
     # there's no reason to ship "low" stands to the client at all
-    keep = gdf[gdf["category"].isin(["high", "medium"])].copy()
+    keep = gdf[gdf["category"].isin(["excellent", "high", "medium"])].copy()
 
     # centroid computed in the planar CRS (before simplify/reproject) so it's a
     # true geometric centroid, used as the Google Maps navigation destination
@@ -277,16 +374,23 @@ def to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
         keep["soiltype"].map(LABELS["soiltype"]).fillna("?") + " ("
         + keep["drainagestate"].map(LABELS["drainagestate"]).fillna("?") + ")"
     )
-    keep["mixture_label"] = keep["diversity_index"].map(mixture_label)
-    keep["diversity_index"] = keep["diversity_index"].round(2)
+    # label from the same rounded value the badge uses, or values just under a
+    # threshold round up to green while the text still says otherwise
+    keep["mixture_label"] = keep["mixture_ratio"].map(mixture_label)
+    keep["light_label"] = [
+        light_label(r, s) for r, s in zip(keep["light_ratio"], keep["stemcount"])
+    ]
 
     # age and area don't feed the score at all (development class already
-    # captures stand-age effects; area is purely descriptive) -- not shipped
+    # captures stand-age effects; area is purely descriptive) -- not shipped.
+    # diversity_index itself isn't shipped either -- mixture_ratio is the
+    # same number, already rounded, and nothing client-side needs both.
     out_cols = [
         "standid", "score", "category", "fertility_label", "development_label",
         "dominant_species", "near_esker", "lat", "lon", "geometry",
         "fertility_ratio", "development_ratio", "species_ratio", "mixture_ratio",
-        "soil_ratio", "soil_label", "mixture_label", "diversity_index",
+        "soil_ratio", "soil_label", "mixture_label",
+        "light_ratio", "light_label",
     ]
     keep = keep[out_cols]
     return json.loads(keep.to_json())
@@ -339,7 +443,9 @@ HTML_TEMPLATE = """<!doctype html>
     width: 26px !important; height: 26px !important; line-height: 24px !important; text-align: center;
   }
   .leaflet-popup-close-button:hover { background: rgba(0,0,0,.35); color: white !important; }
-  .popup-header { padding: 12px 40px 12px 16px; color: white !important; display: flex; justify-content: space-between; align-items: baseline; }
+  /* text colour is set per category inline: white washes out badly on the
+     lighter lime/amber headers, so those get dark text instead */
+  .popup-header { padding: 12px 40px 12px 16px; display: flex; justify-content: space-between; align-items: baseline; }
   .popup-header .popup-score { font-size: 20px; font-weight: bold; }
   .popup-body { padding: 10px 16px; }
   .popup-field { padding: 7px 0; border-bottom: 1px solid #eee; }
@@ -360,13 +466,17 @@ HTML_TEMPLATE = """<!doctype html>
 <script>
 const STANDS = __GEOJSON__;
 const SIGHTINGS = __SIGHTINGS__;
+const GREEN = __GREEN_THRESHOLDS__;  // injected from Python: single source of truth
+const MID = __MID_THRESHOLD__;
 
-const COLORS = { high: "#166534", medium: "#d9a441" };
-// deliberately a different hue (lime/chartreuse), not just a lighter shade of
-// the same green -- two similar greens were hard to tell apart at a glance
-const HIGH_MIXED_COLOR = "#84cc16";
-const MIXTURE_THRESHOLD = 0.55; // diversity_index above this counts as sekametsä on the map
-const CATEGORY_LABELS = { high: "Korkea", medium: "Kohtalainen" };
+// three distinct hues, not shades of the same color -- "Excellent" already
+// implies strong sekametsä (it's one of the all-green requirements), so it
+// gets its own color rather than a lighter/brighter variant of "Korkea"
+const COLORS = { excellent: "#84cc16", high: "#166534", medium: "#d9a441" };
+const CATEGORY_LABELS = { excellent: "Erinomainen", high: "Korkea", medium: "Kohtalainen" };
+// dark text on the light lime/amber headers, white only on the dark green
+const HEADER_TEXT = { excellent: "#1a2e05", high: "#ffffff", medium: "#3d2c06" };
+const FILL_OPACITY = { excellent: 0.65, high: 0.5, medium: 0.35 };
 
 const map = L.map('map', { preferCanvas: true, zoomControl: false });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -374,58 +484,52 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
 }).addTo(map);
 
-function fillColorFor(p) {
-  if (p.category === "high" && p.diversity_index >= MIXTURE_THRESHOLD) return HIGH_MIXED_COLOR;
-  return COLORS[p.category] || "#999";
-}
-
 function style(feature) {
   const p = feature.properties;
   return {
     color: COLORS[p.category] || "#999",
     weight: p.near_esker ? 2 : 1,
-    fillColor: fillColorFor(p),
-    fillOpacity: p.category === "high" ? 0.55 : 0.35,
+    fillColor: COLORS[p.category] || "#999",
+    fillOpacity: FILL_OPACITY[p.category] ?? 0.35,
   };
 }
 
 // ratio is this field's contribution to the score, 0-1 relative to its own
-// max -- null means "not a scored factor" (Ikä/Ala), so no badge is shown.
-// good/mid let a field use its own tier boundaries instead of the 0.65/0.3
-// default: diversity_index (sekametsä) realistically tops out around 0.6-0.7
-// even for a genuinely well-mixed stand, so it needs lower cutoffs to ever
-// show green -- these must match mixture_label()'s own thresholds in Python,
-// or the text ("Vahva sekametsä") and the badge color would disagree.
-function scoreBadge(ratio, good, mid) {
+// max -- null means "not a scored factor", so no badge is shown. Thresholds
+// come from GREEN/MID, injected from the same Python constants the
+// "Erinomainen" rule uses, so a category and its dots can never disagree.
+function scoreBadge(ratio, good) {
   if (ratio == null) return "";
-  good = good ?? 0.65;
-  mid = mid ?? 0.3;
-  const tier = ratio >= good ? "good" : ratio >= mid ? "mid" : "poor";
+  const tier = ratio >= good ? "good" : ratio >= MID ? "mid" : "poor";
   return `<span class="score-badge ${tier}" title="Vaikutus pisteisiin: ${tier}"></span>`;
 }
 
-function popupRow(label, value, ratio, good, mid) {
+function popupRow(label, value, ratio, good) {
   return `<div class="popup-field"><span class="popup-label">${label}</span>` +
-    `<span class="popup-value">${value}${scoreBadge(ratio, good, mid)}</span></div>`;
+    `<span class="popup-value">${value}${scoreBadge(ratio, good)}</span></div>`;
 }
 
 function onEachFeature(feature, layer) {
   const p = feature.properties;
   const rows = [
-    popupRow("Kasvupaikka", p.fertility_label, p.fertility_ratio),
-    popupRow("Kehitysluokka", p.development_label, p.development_ratio),
-    popupRow("Vallitseva puulaji", p.dominant_species, p.species_ratio),
-    popupRow("Sekametsäisyys", p.mixture_label, p.mixture_ratio, 0.55, 0.3),
-    popupRow("Maaperä", p.soil_label, p.soil_ratio),
+    popupRow("Kasvupaikka", p.fertility_label, p.fertility_ratio, GREEN.fertility),
+    popupRow("Kehitysluokka", p.development_label, p.development_ratio, GREEN.development),
+    popupRow("Vallitseva puulaji", p.dominant_species, p.species_ratio, GREEN.species),
+    popupRow("Sekametsäisyys", p.mixture_label, p.mixture_ratio, GREEN.mixture),
+    popupRow("Valoisuus", p.light_label, p.light_ratio, GREEN.light),
+    popupRow("Maaperä", p.soil_label, p.soil_ratio, GREEN.soil),
+    // binary factor: green when near an esker, red when not
     popupRow(
       "Sijainti",
       p.near_esker ? "Lähellä harju-/reunamuodostumaa" : "Ei lähellä harjumuodostumaa",
-      p.near_esker ? 1 : 0
+      p.near_esker ? 1 : 0,
+      1
     ),
   ];
 
   layer.bindPopup(
-    `<div class="popup-header" style="background:${COLORS[p.category] || "#666"}">` +
+    `<div class="popup-header" style="background:${COLORS[p.category] || "#666"};` +
+    `color:${HEADER_TEXT[p.category] || "#fff"}">` +
     `<span>${CATEGORY_LABELS[p.category] || p.category}</span>` +
     `<span class="popup-score">${Math.round(p.score)}/100</span>` +
     `</div>` +
@@ -461,7 +565,7 @@ legend.innerHTML =
   '<button class="legend-close" aria-label="Piilota selite">×</button>' +
   "<b>Kantarelli-todennäköisyys</b>" +
   '<div class="legend-row">' +
-  `<span><span class="swatch" style="background:${HIGH_MIXED_COLOR}"></span>Korkea + sekametsä</span>` +
+  `<span><span class="swatch" style="background:${COLORS.excellent}"></span>Erinomainen</span>` +
   `<span><span class="swatch" style="background:${COLORS.high}"></span>Korkea</span>` +
   `<span><span class="swatch" style="background:${COLORS.medium}"></span>Kohtalainen</span>` +
   "<span>Paksu reuna = lähellä harjumuodostumaa</span>" +
@@ -522,13 +626,16 @@ setInterval(updateLocation, LOCATION_REFRESH_MS);
 
 def render_html(geojson_dict: dict, sightings_dict: dict) -> str:
     html = HTML_TEMPLATE.replace("__GEOJSON__", json.dumps(geojson_dict, ensure_ascii=False))
-    return html.replace("__SIGHTINGS__", json.dumps(sightings_dict, ensure_ascii=False))
+    html = html.replace("__SIGHTINGS__", json.dumps(sightings_dict, ensure_ascii=False))
+    html = html.replace("__GREEN_THRESHOLDS__", json.dumps(GREEN_THRESHOLDS))
+    return html.replace("__MID_THRESHOLD__", json.dumps(MID_THRESHOLD))
 
 
 def main() -> None:
     stand, growthplace, treestand, treestandsummary, treestratum = load_layers()
     scored = score_stands(stand, growthplace, treestand, treestandsummary, treestratum)
     scored = add_esker_bonus(scored)
+    scored = normalize_scores(scored)
     scored = categorize(scored)
 
     print(scored["category"].value_counts(dropna=False))
