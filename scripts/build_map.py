@@ -102,6 +102,11 @@ MID_THRESHOLD = 0.3
 LIGHT_GOOD_THRESHOLD = GREEN_THRESHOLDS["light"]
 LIGHT_MID_THRESHOLD = MID_THRESHOLD
 
+# Share of the raw point total a stand keeps when one factor is at rock
+# bottom. 1.0 would be a pure sum (full compensation between factors);
+# lower values make the worst factor bite harder.
+LIMITING_FLOOR = 0.7
+
 # Point budget per factor. Kept explicit so the "x/100" shown on the map stays
 # honest when factors are added or reweighted.
 ESKER_BONUS_POINTS = 10
@@ -232,22 +237,33 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum) -
     ).where(df["stemcount"].notna())
     light_score = 10 * openness.fillna(0.4)
 
-    df["score"] = (
-        fertility_score + development_score + species_quality_score
-        + mixture_score + soil_score + light_score
-    ).round(1)
-    df.loc[excluded, "score"] = 0
-    df["excluded"] = excluded
-
-    # 0-1 ratios of each factor's contribution relative to its own max, used
-    # to badge every individual popup field on the map -- nothing that feeds
-    # the score is left un-shown, so a stand's category is always explainable
     df["fertility_ratio"] = (fertility_score / 25).round(2)
     df["development_ratio"] = (development_score / 25).round(2)
     df["species_ratio"] = (species_quality_score / 10).round(2)
     df["mixture_ratio"] = df["diversity_index"].round(2)
     df["soil_ratio"] = (soil_score / 15).round(2)
     df["light_ratio"] = (light_score / 10).round(2)
+
+    # Limiting-factor penalty (Liebig's law of the minimum): habitat is
+    # limited by its worst attribute, not its average. A plain sum lets a
+    # stand offset a fatal weakness -- no light, say -- with two maxed-out
+    # factors, which both overrates it ecologically and made some
+    # "Erinomainen" stands (green everywhere, maxed nowhere) score below
+    # "Korkea" stands carrying a red factor. Each factor is measured against
+    # its own green threshold, so "green everywhere" means no penalty at all.
+    weakest = pd.concat(
+        [(df[f"{factor}_ratio"] / threshold).clip(upper=1)
+         for factor, threshold in GREEN_THRESHOLDS.items()],
+        axis=1,
+    ).min(axis=1).fillna(0)
+
+    raw = (
+        fertility_score + development_score + species_quality_score
+        + mixture_score + soil_score + light_score
+    )
+    df["score"] = (raw * (LIMITING_FLOOR + (1 - LIMITING_FLOOR) * weakest)).round(1)
+    df.loc[excluded, "score"] = 0
+    df["excluded"] = excluded
 
     return gpd.GeoDataFrame(df, geometry="geometry", crs=stand.crs)
 
@@ -282,10 +298,25 @@ def categorize(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 def add_esker_bonus(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Proximity to glaciofluvial deposits -- eskers, sandurs, deltas,
+    ice-contact deposits. The point is the *substrate*, not elevation: these
+    are sorted sand and gravel laid down by glacial meltwater rivers, so they
+    drain exceptionally well, which is the soil condition Finnish sources tie
+    to chanterelle-friendly forest.
+
+    The GTK layer also carries moraine (unsorted till) and littoral deposits.
+    Buffering all of them put 62% of Karkkila "near an esker", which made the
+    factor almost meaningless -- and moraine is the opposite of the sorted,
+    free-draining substrate we are actually looking for. Restricting to
+    genuine glaciofluvial deposits brings it to a selective 25%.
+    """
     if not GTK_FORMATIONS_PATH.exists():
         gdf["near_esker"] = False
         return gdf
     formations = gpd.read_file(GTK_FORMATIONS_PATH).to_crs(gdf.crs)
+    deposit_class = formations["DEPOSIT_TYPE_CLASS"].astype(str)
+    glaciofluvial = deposit_class.str.startswith("1") & ~deposit_class.str.startswith("1.5")
+    formations = formations[glaciofluvial]
     buffered = formations.buffer(ESKER_BUFFER_M).union_all()
     centroids = gdf.geometry.centroid
     gdf["near_esker"] = centroids.within(buffered)
