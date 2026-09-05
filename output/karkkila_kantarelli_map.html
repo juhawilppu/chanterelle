@@ -36,9 +36,6 @@
                        font-size: 14px; line-height: 1.3; color: var(--ink-soft); }
   .legend .swatch { flex: none; width: 15px; height: 15px; border-radius: 4px;
                     box-shadow: inset 0 0 0 1px rgba(0,0,0,.16); }
-  /* the "near an esker" cue is a thick polygon outline, so its key is an
-     outline rather than a fill */
-  .legend .swatch.edge { background: #fff; box-shadow: inset 0 0 0 2px #15653a; }
   .legend small { display: block; margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--rule);
                   font-size: 12px; line-height: 1.5; color: var(--ink-faint); }
   .legend-close { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px;
@@ -144,8 +141,8 @@ function style(feature) {
   const c = pal(p.category);
   return {
     color: c.line,
-    weight: p.near_esker ? 2.5 : 1,
-    opacity: p.near_esker ? 0.95 : 0.6,
+    weight: 1,
+    opacity: 0.6,
     fillColor: c.fill,
     fillOpacity: FILL_OPACITY[p.category] ?? 0.45,
   };
@@ -231,7 +228,6 @@ legend.innerHTML =
   `<span><span class="swatch" style="background:${PALETTE.excellent.fill}"></span>Erinomainen</span>` +
   `<span><span class="swatch" style="background:${PALETTE.high.fill}"></span>Korkea</span>` +
   `<span><span class="swatch" style="background:${PALETTE.medium.fill}"></span>Kohtalainen</span>` +
-  '<span><span class="swatch edge"></span>Lähellä harjumuodostumaa</span>' +
   "<span>🚩 Ilmoitettu löytö (laji.fi)</span>" +
   "</div>" +
   "<small>Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) perustuva arvio - ei mittaustietoa itiöemistä.</small>";
