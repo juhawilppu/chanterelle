@@ -12,7 +12,7 @@ one municipality instead of all of Finland.
 
 **Live map: [kantarelli.juhawilppu.com](https://kantarelli.juhawilppu.com)**
 
-![Screenshot of the Karkkila kantarelli map, showing green and orange forest stands colored by chanterelle probability, with a popup showing a stand's score and attributes](docs/screenshot.jpg)
+![Screenshot of the Karkkila kantarelli map: forest stands shaded by chanterelle probability, with an open popup breaking one stand's score down factor by factor — a green, yellow or red dot per factor showing which ones earned the score and which held it back](docs/screenshot.jpg)
 
 ## What it does
 
