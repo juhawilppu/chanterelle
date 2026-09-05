@@ -22,6 +22,7 @@ MUNICIPALITY = "Karkkila"
 ROOT = Path(__file__).resolve().parent.parent
 GPKG_PATH = ROOT / "data" / "raw" / f"MV_{MUNICIPALITY}" / f"MV_{MUNICIPALITY}.gpkg"
 GTK_FORMATIONS_PATH = ROOT / "data" / "cache" / f"gtk_formations_{MUNICIPALITY}.geojson"
+LAJI_SIGHTINGS_PATH = ROOT / "data" / "cache" / f"laji_sightings_{MUNICIPALITY}.json"
 OUTPUT_GEOJSON = ROOT / "output" / "scored_stands.geojson"
 OUTPUT_HTML = ROOT / "output" / "karkkila_kantarelli_map.html"
 
@@ -135,8 +136,17 @@ def compute_species_mix(treestand: pd.DataFrame, treestratum: pd.DataFrame) -> p
     dominant = tt.loc[dominant_idx, ["treestandid", "treespecies"]].set_index("treestandid")
     dominant["dominant_species"] = dominant["treespecies"].map(TREESPECIES_LABELS).fillna("Muu")
 
-    mix = pd.concat([totals, weighted], axis=1).join(dominant["dominant_species"])
+    # Gini-Simpson diversity index (1 - sum of squared species shares) over
+    # actual basal-area composition: 0 = pure monoculture, closer to 1 = a
+    # genuine "sekametsä" of several well-balanced species. Independent of
+    # SPECIES_WEIGHT/host quality -- this measures mixedness itself.
+    species_ba = tt.groupby(["treestandid", "treespecies"])["basalarea"].sum()
+    shares = species_ba / species_ba.groupby(level="treestandid").transform("sum")
+    diversity = (1 - (shares ** 2).groupby(level="treestandid").sum()).rename("diversity_index")
+
+    mix = pd.concat([totals, weighted, diversity], axis=1).join(dominant["dominant_species"])
     mix["species_fraction"] = (mix["weighted_ba"] / mix["total_ba"]).clip(upper=1).fillna(0)
+    mix["diversity_index"] = mix["diversity_index"].fillna(0)
     return mix.reset_index()
 
 
@@ -157,21 +167,30 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum) -
 
     fertility_score = df["fertilityclass"].map(FERTILITY_POINTS).fillna(6)
     development_score = df["developmentclass"].map(DEVELOPMENT_POINTS).fillna(8)
-    soil_score = df["soiltype"].map(SOIL_POINTS).fillna(7)
-    drainage_mult = df["drainagestate"].map(DRAINAGE_MULTIPLIER).fillna(0.2)
-    species_score = 25 * df["species_fraction"].fillna(0.3)
+    soil_score = df["soiltype"].map(SOIL_POINTS).fillna(7) * df["drainagestate"].map(DRAINAGE_MULTIPLIER).fillna(0.2)
+    # species contribution is split into host quality (spruce/pine/birch as a
+    # mycorrhizal partner, weighted per SPECIES_WEIGHT) and a separate
+    # "sekametsä" mixture bonus (Gini-Simpson diversity of the actual species
+    # composition) -- a stand can score well on one without the other. The
+    # mixture half now outweighs raw host quality, per specific request to
+    # emphasize genuinely mixed forest over a monoculture of the "best" species.
+    species_quality_score = 10 * df["species_fraction"].fillna(0.3)
+    mixture_score = 15 * df["diversity_index"].fillna(0)
 
     df["score"] = (
-        fertility_score + development_score + species_score + soil_score * drainage_mult
+        fertility_score + development_score + species_quality_score + mixture_score + soil_score
     ).round(1)
     df.loc[excluded, "score"] = 0
     df["excluded"] = excluded
 
-    # 0-1 ratios of each factor's contribution relative to its own max (25 for
-    # all three), used to badge individual popup fields on the map
+    # 0-1 ratios of each factor's contribution relative to its own max, used
+    # to badge every individual popup field on the map -- nothing that feeds
+    # the score is left un-shown, so a stand's category is always explainable
     df["fertility_ratio"] = (fertility_score / 25).round(2)
     df["development_ratio"] = (development_score / 25).round(2)
-    df["species_ratio"] = (species_score / 25).round(2)
+    df["species_ratio"] = (species_quality_score / 10).round(2)
+    df["mixture_ratio"] = df["diversity_index"].round(2)
+    df["soil_ratio"] = (soil_score / 15).round(2)
 
     return gpd.GeoDataFrame(df, geometry="geometry", crs=stand.crs)
 
@@ -217,7 +236,25 @@ LABELS = {
         "ER": "Eri-ikäisrakenteinen", "S0": "Siemenpuumetsikkö",
         "Y1": "Ylispuustoinen taimikko", "T2": "Taimikko",
     },
+    "soiltype": {
+        "10": "Karkea kangasmaa", "11": "Karkea moreeni", "12": "Karkea lajittunut maalaji",
+        "30": "Kivinen karkea kangasmaa", "31": "Kivinen karkea moreeni", "32": "Kivinen karkea lajittunut maalaji",
+        "20": "Hienojakoinen kangasmaa", "21": "Hienoainesmoreeni", "22": "Hienojakoinen lajittunut maalaji",
+        "23": "Silttipitoinen maalaji", "24": "Savimaa", "40": "Kivinen hienojakoinen kangasmaa",
+        "50": "Kallio/kivikko",
+    },
+    "drainagestate": {
+        "1": "ojittamaton", "2": "soistunut", "3": "ojitettu",
+    },
 }
+
+
+def mixture_label(diversity_index: float) -> str:
+    if diversity_index >= 0.55:
+        return "Vahva sekametsä"
+    if diversity_index >= 0.3:
+        return "Jonkin verran sekapuustoa"
+    return "Lähes yksipuulajinen"
 
 
 def to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
@@ -236,16 +273,38 @@ def to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
 
     keep["fertility_label"] = keep["fertilityclass"].map(LABELS["fertilityclass"]).fillna("?")
     keep["development_label"] = keep["developmentclass"].map(LABELS["developmentclass"]).fillna("?")
-    keep["area_ha"] = keep["area"].round(2)
-    keep["age"] = keep["age"].round(0)
+    keep["soil_label"] = (
+        keep["soiltype"].map(LABELS["soiltype"]).fillna("?") + " ("
+        + keep["drainagestate"].map(LABELS["drainagestate"]).fillna("?") + ")"
+    )
+    keep["mixture_label"] = keep["diversity_index"].map(mixture_label)
+    keep["diversity_index"] = keep["diversity_index"].round(2)
 
+    # age and area don't feed the score at all (development class already
+    # captures stand-age effects; area is purely descriptive) -- not shipped
     out_cols = [
         "standid", "score", "category", "fertility_label", "development_label",
-        "dominant_species", "age", "area_ha", "near_esker", "lat", "lon", "geometry",
-        "fertility_ratio", "development_ratio", "species_ratio",
+        "dominant_species", "near_esker", "lat", "lon", "geometry",
+        "fertility_ratio", "development_ratio", "species_ratio", "mixture_ratio",
+        "soil_ratio", "soil_label", "mixture_label", "diversity_index",
     ]
     keep = keep[out_cols]
     return json.loads(keep.to_json())
+
+
+def load_sightings_geojson() -> dict:
+    if not LAJI_SIGHTINGS_PATH.exists():
+        return {"type": "FeatureCollection", "features": []}
+    sightings = json.loads(LAJI_SIGHTINGS_PATH.read_text())
+    features = [
+        {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [s["lon"], s["lat"]]},
+            "properties": {"date": s["date"], "standid": s["standid"]},
+        }
+        for s in sightings
+    ]
+    return {"type": "FeatureCollection", "features": features}
 
 
 HTML_TEMPLATE = """<!doctype html>
@@ -288,10 +347,11 @@ HTML_TEMPLATE = """<!doctype html>
   .popup-label { display: block; color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
   .popup-value { display: block; margin-top: 2px; }
   .score-badge { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-left: 7px; vertical-align: middle; }
-  .score-badge.good { background: #1a73e8; }
+  .score-badge.good { background: #1a7a2e; }
   .score-badge.mid { background: #e0a72e; }
   .score-badge.poor { background: #d64545; }
   .gmaps-btn { display: block; text-align: center; margin-top: 10px; padding: 9px 12px; background: #1a73e8; color: white !important; border-radius: 6px; text-decoration: none; font-size: 15px; font-weight: bold; }
+  .sighting-flag { font-size: 20px; line-height: 1; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
 </style>
 </head>
 <body>
@@ -299,8 +359,13 @@ HTML_TEMPLATE = """<!doctype html>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const STANDS = __GEOJSON__;
+const SIGHTINGS = __SIGHTINGS__;
 
-const COLORS = { high: "#1a7a2e", medium: "#d9a441" };
+const COLORS = { high: "#166534", medium: "#d9a441" };
+// deliberately a different hue (lime/chartreuse), not just a lighter shade of
+// the same green -- two similar greens were hard to tell apart at a glance
+const HIGH_MIXED_COLOR = "#84cc16";
+const MIXTURE_THRESHOLD = 0.55; // diversity_index above this counts as sekametsä on the map
 const CATEGORY_LABELS = { high: "Korkea", medium: "Kohtalainen" };
 
 const map = L.map('map', { preferCanvas: true, zoomControl: false });
@@ -309,32 +374,39 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
 }).addTo(map);
 
+function fillColorFor(p) {
+  if (p.category === "high" && p.diversity_index >= MIXTURE_THRESHOLD) return HIGH_MIXED_COLOR;
+  return COLORS[p.category] || "#999";
+}
+
 function style(feature) {
-  const cat = feature.properties.category;
+  const p = feature.properties;
   return {
-    color: COLORS[cat] || "#999",
-    weight: feature.properties.near_esker ? 2 : 1,
-    fillColor: COLORS[cat] || "#999",
-    fillOpacity: cat === "high" ? 0.55 : 0.35,
+    color: COLORS[p.category] || "#999",
+    weight: p.near_esker ? 2 : 1,
+    fillColor: fillColorFor(p),
+    fillOpacity: p.category === "high" ? 0.55 : 0.35,
   };
 }
 
 // ratio is this field's contribution to the score, 0-1 relative to its own
-// max -- null means "not a scored factor" (Ikä/Ala), so no badge is shown
-function scoreBadge(ratio) {
+// max -- null means "not a scored factor" (Ikä/Ala), so no badge is shown.
+// good/mid let a field use its own tier boundaries instead of the 0.65/0.3
+// default: diversity_index (sekametsä) realistically tops out around 0.6-0.7
+// even for a genuinely well-mixed stand, so it needs lower cutoffs to ever
+// show green -- these must match mixture_label()'s own thresholds in Python,
+// or the text ("Vahva sekametsä") and the badge color would disagree.
+function scoreBadge(ratio, good, mid) {
   if (ratio == null) return "";
-  const tier = ratio >= 0.65 ? "good" : ratio >= 0.3 ? "mid" : "poor";
+  good = good ?? 0.65;
+  mid = mid ?? 0.3;
+  const tier = ratio >= good ? "good" : ratio >= mid ? "mid" : "poor";
   return `<span class="score-badge ${tier}" title="Vaikutus pisteisiin: ${tier}"></span>`;
 }
 
-function popupRow(label, value, ratio) {
+function popupRow(label, value, ratio, good, mid) {
   return `<div class="popup-field"><span class="popup-label">${label}</span>` +
-    `<span class="popup-value">${value}${scoreBadge(ratio)}</span></div>`;
-}
-
-// Finland uses "," as the decimal separator
-function fiNum(n) {
-  return String(n).replace(".", ",");
+    `<span class="popup-value">${value}${scoreBadge(ratio, good, mid)}</span></div>`;
 }
 
 function onEachFeature(feature, layer) {
@@ -343,15 +415,19 @@ function onEachFeature(feature, layer) {
     popupRow("Kasvupaikka", p.fertility_label, p.fertility_ratio),
     popupRow("Kehitysluokka", p.development_label, p.development_ratio),
     popupRow("Vallitseva puulaji", p.dominant_species, p.species_ratio),
-    popupRow("Ikä", `${p.age ?? "?"} v`),
-    popupRow("Ala", `${fiNum(p.area_ha)} ha`),
+    popupRow("Sekametsäisyys", p.mixture_label, p.mixture_ratio, 0.55, 0.3),
+    popupRow("Maaperä", p.soil_label, p.soil_ratio),
+    popupRow(
+      "Sijainti",
+      p.near_esker ? "Lähellä harju-/reunamuodostumaa" : "Ei lähellä harjumuodostumaa",
+      p.near_esker ? 1 : 0
+    ),
   ];
-  if (p.near_esker) rows.push(popupRow("Sijainti", "Lähellä harju-/reunamuodostumaa", 1));
 
   layer.bindPopup(
     `<div class="popup-header" style="background:${COLORS[p.category] || "#666"}">` +
     `<span>${CATEGORY_LABELS[p.category] || p.category}</span>` +
-    `<span class="popup-score">${fiNum(p.score)}/100</span>` +
+    `<span class="popup-score">${Math.round(p.score)}/100</span>` +
     `</div>` +
     `<div class="popup-body">` +
     rows.join("") +
@@ -367,15 +443,29 @@ function onEachFeature(feature, layer) {
 const layer = L.geoJSON(STANDS, { style, onEachFeature }).addTo(map);
 map.fitBounds(layer.getBounds());
 
+// Real laji.fi kantarelli sighting flags, where a report happens to fall
+// inside a stand shown on the map
+L.geoJSON(SIGHTINGS, {
+  pointToLayer: (feature, latlng) => L.marker(latlng, {
+    icon: L.divIcon({ className: "", html: '<div class="sighting-flag">🚩</div>', iconSize: [20, 20], iconAnchor: [4, 18] }),
+  }),
+  onEachFeature: (feature, layer) => {
+    const d = feature.properties.date || "tuntematon ajankohta";
+    layer.bindPopup(`<b>Kantarellihavainto</b><br>Ilmoitettu laji.fi-palveluun<br>${d}`);
+  },
+}).addTo(map);
+
 const legend = document.createElement("div");
 legend.className = "legend";
 legend.innerHTML =
   '<button class="legend-close" aria-label="Piilota selite">×</button>' +
   "<b>Kantarelli-todennäköisyys</b>" +
   '<div class="legend-row">' +
+  `<span><span class="swatch" style="background:${HIGH_MIXED_COLOR}"></span>Korkea + sekametsä</span>` +
   `<span><span class="swatch" style="background:${COLORS.high}"></span>Korkea</span>` +
   `<span><span class="swatch" style="background:${COLORS.medium}"></span>Kohtalainen</span>` +
   "<span>Paksu reuna = lähellä harjumuodostumaa</span>" +
+  "<span>🚩 = ilmoitettu löytö (laji.fi)</span>" +
   "</div>" +
   "<small>Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) perustuva arvio - ei mittaustietoa itiöemistä.</small>";
 document.body.appendChild(legend);
@@ -430,8 +520,9 @@ setInterval(updateLocation, LOCATION_REFRESH_MS);
 """
 
 
-def render_html(geojson_dict: dict) -> str:
-    return HTML_TEMPLATE.replace("__GEOJSON__", json.dumps(geojson_dict, ensure_ascii=False))
+def render_html(geojson_dict: dict, sightings_dict: dict) -> str:
+    html = HTML_TEMPLATE.replace("__GEOJSON__", json.dumps(geojson_dict, ensure_ascii=False))
+    return html.replace("__SIGHTINGS__", json.dumps(sightings_dict, ensure_ascii=False))
 
 
 def main() -> None:
@@ -444,10 +535,12 @@ def main() -> None:
 
     OUTPUT_GEOJSON.parent.mkdir(parents=True, exist_ok=True)
     geojson_dict = to_geojson_dict(scored)
+    sightings_dict = load_sightings_geojson()
     OUTPUT_GEOJSON.write_text(json.dumps(geojson_dict, ensure_ascii=False), encoding="utf-8")
-    OUTPUT_HTML.write_text(render_html(geojson_dict), encoding="utf-8")
+    OUTPUT_HTML.write_text(render_html(geojson_dict, sightings_dict), encoding="utf-8")
     print(f"Wrote {OUTPUT_GEOJSON}")
     print(f"Wrote {OUTPUT_HTML}")
+    print(f"{len(sightings_dict['features'])} laji.fi sightings embedded as flags")
 
 
 if __name__ == "__main__":
