@@ -6,45 +6,104 @@
 <title>Karkkila kantarelli-todennäköisyyskartta</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
-  html, body { margin: 0; height: 100%; font-family: sans-serif; }
-  #map { height: 100%; }
+  :root {
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ink: #1d2420;        /* body text */
+    --ink-soft: #56605a;   /* secondary text */
+    --ink-faint: #8a938c;   /* labels, captions */
+    --rule: #e9ece7;       /* hairline separators */
+    --forest: #1f5136;     /* the app's own accent, used for actions */
+  }
+  html, body { margin: 0; height: 100%; font-family: var(--font); color: var(--ink);
+               -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  #map { height: 100%; background: #eceee9; }
+  /* OSM's own greens and browns compete with the score colours for attention.
+     Muting the tiles keeps every road, path and label legible while letting
+     the stand polygons read as the data layer they are. */
+  .leaflet-tile-pane { filter: saturate(.45) brightness(1.06) contrast(.94); }
 
+  /* --- legend ---------------------------------------------------------- */
   .legend { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000;
-            background: white; box-shadow: 0 -1px 6px rgba(0,0,0,.3);
-            padding: 10px 40px calc(10px + env(safe-area-inset-bottom, 0px)) 14px;
-            font-size: 16px; line-height: 1.4; }
-  .legend b { display: block; }
-  .legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-top: 4px; }
-  .legend span.swatch { display: inline-block; width: 14px; height: 14px; margin-right: 4px; vertical-align: middle; border-radius: 3px; }
-  .legend small { display: block; margin-top: 4px; font-size: 13px; color: #444; }
-  .legend-close { position: absolute; top: 6px; right: 8px; width: 28px; height: 28px; border: none; background: none;
-                  font-size: 20px; line-height: 28px; color: #888; cursor: pointer; }
+            background: rgba(255,255,255,.95);
+            -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+            border-top: 1px solid var(--rule); border-radius: 16px 16px 0 0;
+            box-shadow: 0 -10px 30px rgba(23,35,28,.13);
+            padding: 14px 46px calc(14px + env(safe-area-inset-bottom, 0px)) 18px; }
+  .legend-title { display: block; font-size: 11px; font-weight: 700; letter-spacing: .09em;
+                  text-transform: uppercase; color: var(--ink-faint); }
+  .legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin-top: 10px; }
+  .legend-row > span { display: inline-flex; align-items: center; gap: 7px;
+                       font-size: 14px; line-height: 1.3; color: var(--ink-soft); }
+  .legend .swatch { flex: none; width: 15px; height: 15px; border-radius: 4px;
+                    box-shadow: inset 0 0 0 1px rgba(0,0,0,.16); }
+  /* the "near an esker" cue is a thick polygon outline, so its key is an
+     outline rather than a fill */
+  .legend .swatch.edge { background: #fff; box-shadow: inset 0 0 0 2px #15653a; }
+  .legend small { display: block; margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--rule);
+                  font-size: 12px; line-height: 1.5; color: var(--ink-faint); }
+  .legend-close { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px;
+                  border: none; border-radius: 50%; background: #f1f3ef; color: var(--ink-faint);
+                  font-size: 17px; line-height: 30px; text-align: center; cursor: pointer;
+                  transition: background .15s, color .15s; }
+  .legend-close:hover { background: #e4e8e2; color: var(--ink); }
 
-  .my-location-dot { width: 16px; height: 16px; border-radius: 50%; background: #1a73e8; border: 2px solid white; box-shadow: 0 0 0 2px rgba(26,115,232,.5); }
+  .my-location-dot { width: 16px; height: 16px; border-radius: 50%; background: #1a73e8;
+                     border: 2px solid white; box-shadow: 0 0 0 2px rgba(26,115,232,.45), 0 1px 4px rgba(0,0,0,.3); }
 
-  .leaflet-popup-content-wrapper { padding: 0; border-radius: 12px; overflow: hidden; }
-  .leaflet-popup-content { margin: 0; font-size: 16px; line-height: 1.5; min-width: 230px; }
+  /* --- popup ----------------------------------------------------------- */
+  .leaflet-popup-content-wrapper { padding: 0; border-radius: 14px; overflow: hidden;
+                                   box-shadow: 0 12px 36px rgba(23,35,28,.22); }
+  .leaflet-popup-content { margin: 0; font-size: 15px; line-height: 1.5; min-width: 258px; }
   .leaflet-popup-close-button {
-    color: white !important; background: rgba(0,0,0,.2); border-radius: 50%;
-    top: 8px !important; right: 8px !important; font-size: 20px !important;
+    color: var(--ink-faint) !important; background: none;
+    top: 10px !important; right: 8px !important; font-size: 20px !important;
     width: 26px !important; height: 26px !important; line-height: 24px !important; text-align: center;
   }
-  .leaflet-popup-close-button:hover { background: rgba(0,0,0,.35); color: white !important; }
-  /* text colour is set per category inline: white washes out badly on the
-     lighter lime/amber headers, so those get dark text instead */
-  .popup-header { padding: 12px 40px 12px 16px; display: flex; justify-content: space-between; align-items: baseline; }
-  .popup-header .popup-score { font-size: 20px; font-weight: bold; }
-  .popup-body { padding: 10px 16px; }
-  .popup-field { padding: 7px 0; border-bottom: 1px solid #eee; }
+  .leaflet-popup-close-button:hover { color: var(--ink) !important; }
+  /* the category's three tones (fill, ink, tint) arrive as custom properties
+     set inline per stand, so one palette in JS drives map, legend and popup */
+  .popup-header { padding: 13px 46px 12px 16px; background: var(--cat-tint);
+                  border-top: 4px solid var(--cat);
+                  display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .popup-cat { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700;
+               letter-spacing: .07em; text-transform: uppercase; color: var(--cat-ink); }
+  .popup-cat::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 3px; background: var(--cat); }
+  .popup-score { font-size: 21px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap;
+                 color: var(--cat-ink); font-variant-numeric: tabular-nums; }
+  .popup-score em { font-style: normal; font-size: 13px; font-weight: 600; opacity: .6; }
+  .popup-body { padding: 4px 16px 15px; }
+  /* the per-factor dot leads its row rather than trailing the value: values
+     wrap freely ("Lähellä harju-/reunamuodostumaa" does), and trailing dots
+     ended up orphaned on a line of their own. Leading dots also line up into
+     one scannable column of greens and reds. */
+  .popup-field { display: flex; align-items: flex-start; gap: 9px;
+                 padding: 8px 0; border-bottom: 1px solid var(--rule); }
   .popup-field:last-child { border-bottom: none; }
-  .popup-label { display: block; color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-  .popup-value { display: block; margin-top: 2px; }
-  .score-badge { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-left: 7px; vertical-align: middle; }
-  .score-badge.good { background: #1a7a2e; }
-  .score-badge.mid { background: #e0a72e; }
-  .score-badge.poor { background: #d64545; }
-  .gmaps-btn { display: block; text-align: center; margin-top: 10px; padding: 9px 12px; background: #1a73e8; color: white !important; border-radius: 6px; text-decoration: none; font-size: 15px; font-weight: bold; }
+  .popup-label { display: block; color: var(--ink-faint); font-size: 10.5px; font-weight: 700;
+                 text-transform: uppercase; letter-spacing: .08em; }
+  .popup-value { display: block; margin-top: 3px; }
+  .score-badge { flex: none; width: 10px; height: 10px; margin-top: 3px; border-radius: 50%;
+                 box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+  .score-badge.blank { background: none; box-shadow: none; }
+  .score-badge.good { background: #1f7a3f; }
+  .score-badge.mid { background: #dfa32c; }
+  .score-badge.poor { background: #cd5b52; }
+  .gmaps-btn { display: flex; align-items: center; justify-content: center; gap: 7px;
+               margin-top: 14px; padding: 11px 14px; background: var(--forest); color: white !important;
+               border-radius: 10px; text-decoration: none; font-size: 14px; font-weight: 600;
+               box-shadow: 0 2px 8px rgba(31,81,54,.26); transition: background .15s, transform .08s; }
+  .gmaps-btn:hover { background: #18402b; }
+  .gmaps-btn:active { transform: translateY(1px); }
   .sighting-flag { font-size: 20px; line-height: 1; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  /* .leaflet-popup-content carries no padding of its own (the stand popup
+     supplies its own), so the sighting popup brings a padded wrapper */
+  .popup-note { padding: 14px 40px 14px 16px; }
+  .popup-note b { display: block; margin-bottom: 3px; font-size: 12px; font-weight: 700;
+                  letter-spacing: .07em; text-transform: uppercase; color: var(--forest); }
+  .popup-note span { color: var(--ink-soft); font-size: 14px; }
+
+  .leaflet-container { font-family: var(--font); }
+  .leaflet-control-attribution { font-size: 11px; background: rgba(255,255,255,.82) !important; }
 </style>
 </head>
 <body>
@@ -56,14 +115,23 @@ const SIGHTINGS = {"type": "FeatureCollection", "features": [{"type": "Feature",
 const GREEN = {"fertility": 0.65, "development": 0.65, "species": 0.65, "mixture": 0.55, "light": 0.75, "soil": 0.65};  // injected from Python: single source of truth
 const MID = 0.3;
 
-// three distinct hues, not shades of the same color -- "Excellent" already
-// implies strong sekametsä (it's one of the all-green requirements), so it
-// gets its own color rather than a lighter/brighter variant of "Korkea"
-const COLORS = { excellent: "#84cc16", high: "#166534", medium: "#d9a441" };
+// An ordered ramp rather than three unrelated hues: the colour cools and
+// darkens as the category improves (chanterelle gold -> yellow-green -> deep
+// pine), so which green outranks which is readable straight off the map. The
+// previous palette paired bright lime with dark green and said nothing about
+// their order. Per category: `fill` paints the polygon and legend swatch,
+// `line` its outline, `ink` carries text on the popup's `tint` background.
+const PALETTE = {
+  excellent: { fill: "#15653a", line: "#0e4527", ink: "#0f4a2a", tint: "#e6f1ea" },
+  high:      { fill: "#5aa84a", line: "#3d7c31", ink: "#2f6b28", tint: "#ecf5e8" },
+  medium:    { fill: "#e0a33c", line: "#a8741d", ink: "#8a5a11", tint: "#fbf2e1" },
+};
+const FALLBACK = { fill: "#9aa39c", line: "#6f7872", ink: "#3c4340", tint: "#f0f1ef" };
+const pal = (category) => PALETTE[category] || FALLBACK;
 const CATEGORY_LABELS = { excellent: "Erinomainen", high: "Korkea", medium: "Kohtalainen" };
-// dark text on the light lime/amber headers, white only on the dark green
-const HEADER_TEXT = { excellent: "#1a2e05", high: "#ffffff", medium: "#3d2c06" };
-const FILL_OPACITY = { excellent: 0.65, high: 0.5, medium: 0.35 };
+// opacity climbs with the ranking too, so the ordering survives even where the
+// basemap underneath is busy
+const FILL_OPACITY = { excellent: 0.72, high: 0.58, medium: 0.45 };
 
 const map = L.map('map', { preferCanvas: true, zoomControl: false });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -73,11 +141,13 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 function style(feature) {
   const p = feature.properties;
+  const c = pal(p.category);
   return {
-    color: COLORS[p.category] || "#999",
-    weight: p.near_esker ? 2 : 1,
-    fillColor: COLORS[p.category] || "#999",
-    fillOpacity: FILL_OPACITY[p.category] ?? 0.35,
+    color: c.line,
+    weight: p.near_esker ? 2.5 : 1,
+    opacity: p.near_esker ? 0.95 : 0.6,
+    fillColor: c.fill,
+    fillOpacity: FILL_OPACITY[p.category] ?? 0.45,
   };
 }
 
@@ -86,14 +156,17 @@ function style(feature) {
 // come from GREEN/MID, injected from the same Python constants the
 // "Erinomainen" rule uses, so a category and its dots can never disagree.
 function scoreBadge(ratio, good) {
-  if (ratio == null) return "";
+  // an invisible dot rather than none at all, so an unscored row still lines
+  // its text up with the scored ones above and below it
+  if (ratio == null) return '<span class="score-badge blank"></span>';
   const tier = ratio >= good ? "good" : ratio >= MID ? "mid" : "poor";
   return `<span class="score-badge ${tier}" title="Vaikutus pisteisiin: ${tier}"></span>`;
 }
 
 function popupRow(label, value, ratio, good) {
-  return `<div class="popup-field"><span class="popup-label">${label}</span>` +
-    `<span class="popup-value">${value}${scoreBadge(ratio, good)}</span></div>`;
+  return `<div class="popup-field">${scoreBadge(ratio, good)}<div>` +
+    `<span class="popup-label">${label}</span>` +
+    `<span class="popup-value">${value}</span></div></div>`;
 }
 
 function onEachFeature(feature, layer) {
@@ -114,19 +187,19 @@ function onEachFeature(feature, layer) {
     ),
   ];
 
+  const c = pal(p.category);
   layer.bindPopup(
-    `<div class="popup-header" style="background:${COLORS[p.category] || "#666"};` +
-    `color:${HEADER_TEXT[p.category] || "#fff"}">` +
-    `<span>${CATEGORY_LABELS[p.category] || p.category}</span>` +
-    `<span class="popup-score">${Math.round(p.score)}/100</span>` +
+    `<div class="popup-header" style="--cat:${c.fill};--cat-ink:${c.ink};--cat-tint:${c.tint}">` +
+    `<span class="popup-cat">${CATEGORY_LABELS[p.category] || p.category}</span>` +
+    `<span class="popup-score">${Math.round(p.score)}<em>/100</em></span>` +
     `</div>` +
     `<div class="popup-body">` +
     rows.join("") +
     `<a class="gmaps-btn" target="_blank" rel="noopener" ` +
     `href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}&travelmode=driving">` +
-    `Navigoi tänne (Google Maps)</a>` +
+    `Navigoi tänne &middot; Google Maps</a>` +
     `</div>`,
-    { minWidth: 230 }
+    { minWidth: 258 }
   );
 }
 
@@ -142,7 +215,10 @@ L.geoJSON(SIGHTINGS, {
   }),
   onEachFeature: (feature, layer) => {
     const d = feature.properties.date || "tuntematon ajankohta";
-    layer.bindPopup(`<b>Kantarellihavainto</b><br>Ilmoitettu laji.fi-palveluun<br>${d}`);
+    layer.bindPopup(
+      `<div class="popup-note"><b>Kantarellihavainto</b>` +
+      `<span>Ilmoitettu laji.fi-palveluun<br>${d}</span></div>`
+    );
   },
 }).addTo(map);
 
@@ -150,13 +226,13 @@ const legend = document.createElement("div");
 legend.className = "legend";
 legend.innerHTML =
   '<button class="legend-close" aria-label="Piilota selite">×</button>' +
-  "<b>Kantarelli-todennäköisyys</b>" +
+  '<span class="legend-title">Kantarelli-todennäköisyys</span>' +
   '<div class="legend-row">' +
-  `<span><span class="swatch" style="background:${COLORS.excellent}"></span>Erinomainen</span>` +
-  `<span><span class="swatch" style="background:${COLORS.high}"></span>Korkea</span>` +
-  `<span><span class="swatch" style="background:${COLORS.medium}"></span>Kohtalainen</span>` +
-  "<span>Paksu reuna = lähellä harjumuodostumaa</span>" +
-  "<span>🚩 = Ilmoitettu löytö (laji.fi)</span>" +
+  `<span><span class="swatch" style="background:${PALETTE.excellent.fill}"></span>Erinomainen</span>` +
+  `<span><span class="swatch" style="background:${PALETTE.high.fill}"></span>Korkea</span>` +
+  `<span><span class="swatch" style="background:${PALETTE.medium.fill}"></span>Kohtalainen</span>` +
+  '<span><span class="swatch edge"></span>Lähellä harjumuodostumaa</span>' +
+  "<span>🚩 Ilmoitettu löytö (laji.fi)</span>" +
   "</div>" +
   "<small>Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) perustuva arvio - ei mittaustietoa itiöemistä.</small>";
 document.body.appendChild(legend);
