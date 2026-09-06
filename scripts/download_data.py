@@ -1,4 +1,4 @@
-"""Download the source datasets for the chanterelle habitat map.
+"""Download the source datasets for the mushroom habitat maps.
 
 Sources:
 - Suomen metsäkeskus (Finnish Forest Centre) open forest resource data
@@ -6,9 +6,9 @@ Sources:
 - GTK (Geological Survey of Finland) glaciofluvial / moraine formation
   polygons (eskers etc.), fetched by bounding box from their ArcGIS REST
   service, clipped to the extent of the forest stand data above.
-- laji.fi (FinBIF) real Cantharellus cibarius sighting coordinates within
-  the municipality, for the "reported here" flags on the map. Optional:
-  skipped if no LAJI_FI_TOKEN is set in .env.
+- laji.fi (FinBIF) real sighting coordinates for every mapped species
+  within the municipality, for the "reported here" flags on the map.
+  Optional: skipped if no LAJI_FI_TOKEN is set in .env.
 
 All are cached under data/ so re-running this script is a no-op unless
 the cache is deleted.
@@ -22,6 +22,8 @@ import geopandas as gpd
 import requests
 from pyproj import Transformer
 from shapely.geometry import Point
+
+from species import PROFILES, SpeciesProfile
 
 MUNICIPALITY = "Karkkila"
 
@@ -41,7 +43,10 @@ GTK_FORMATIONS_LAYER_URL = (
 GTK_FORMATIONS_PATH = CACHE_DIR / f"gtk_formations_{MUNICIPALITY}.geojson"
 
 LAJI_API = "https://api.laji.fi/v0/warehouse/query/unit/list"
-LAJI_SIGHTINGS_PATH = CACHE_DIR / f"laji_sightings_{MUNICIPALITY}.json"
+
+
+def laji_sightings_path(profile: SpeciesProfile) -> Path:
+    return CACHE_DIR / f"laji_sightings_{MUNICIPALITY}_{profile.slug}.json"
 
 
 def download_forest_stand_data() -> Path:
@@ -94,24 +99,25 @@ def load_laji_token() -> str | None:
     return None
 
 
-def download_laji_sightings(stand_gdf: gpd.GeoDataFrame) -> Path | None:
-    """Real kantarelli sighting coordinates within this municipality, for the
-    "reported here" flags on the map. Optional -- skipped without a token."""
-    if LAJI_SIGHTINGS_PATH.exists():
-        print(f"Using cached {LAJI_SIGHTINGS_PATH}")
-        return LAJI_SIGHTINGS_PATH
+def download_laji_sightings(stand_gdf: gpd.GeoDataFrame, profile: SpeciesProfile) -> Path | None:
+    """Real sighting coordinates for one species within this municipality, for
+    the "reported here" flags on the map. Optional -- skipped without a token."""
+    cache_path = laji_sightings_path(profile)
+    if cache_path.exists():
+        print(f"Using cached {cache_path}")
+        return cache_path
 
     token = load_laji_token()
     if not token:
-        print("No LAJI_FI_TOKEN in .env -- skipping laji.fi sighting flags (optional).")
+        print(f"No LAJI_FI_TOKEN in .env -- skipping {profile.name} sighting flags (optional).")
         return None
 
     minx, miny, maxx, maxy = stand_gdf.to_crs(4326).total_bounds
     coordinates = f"{miny}:{maxy}:{minx}:{maxx}:WGS84"
 
-    print(f"Querying laji.fi for kantarelli sightings within {MUNICIPALITY} ...")
+    print(f"Querying laji.fi for {profile.name} sightings within {MUNICIPALITY} ...")
     resp = requests.get(LAJI_API, params={
-        "target": "Cantharellus cibarius",
+        "target": profile.laji_target,
         "coordinates": coordinates,
         "pageSize": 1000,
         "access_token": token,
@@ -139,16 +145,17 @@ def download_laji_sightings(stand_gdf: gpd.GeoDataFrame) -> Path | None:
         })
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    LAJI_SIGHTINGS_PATH.write_text(json.dumps(sightings, ensure_ascii=False))
-    print(f"Found {len(sightings)} kantarelli sightings within {MUNICIPALITY}. Cached to {LAJI_SIGHTINGS_PATH}")
-    return LAJI_SIGHTINGS_PATH
+    cache_path.write_text(json.dumps(sightings, ensure_ascii=False))
+    print(f"Found {len(sightings)} {profile.name} sightings within {MUNICIPALITY}. Cached to {cache_path}")
+    return cache_path
 
 
 def main() -> None:
     gpkg_path = download_forest_stand_data()
     stand = gpd.read_file(gpkg_path, layer="stand")
     download_gtk_formations(tuple(stand.total_bounds))
-    download_laji_sightings(stand)
+    for profile in PROFILES.values():
+        download_laji_sightings(stand, profile)
 
 
 if __name__ == "__main__":

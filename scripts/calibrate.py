@@ -1,9 +1,9 @@
-"""Calibrate the chanterelle habitat scoring model against real sighting data.
+"""Calibrate a species' habitat scoring model against real sighting data.
 
 Not used to place pins on the map -- used as a check on the model itself.
-Pulls real Cantharellus cibarius (kantarelli) observation coordinates from
-laji.fi (FinBIF) across a region ecologically comparable to Karkkila
-(southern Finland; Karkkila alone has too few sightings to be useful), looks
+Pulls real observation coordinates for one mapped species from laji.fi
+(FinBIF) across a region ecologically comparable to Karkkila (southern
+Finland; Karkkila alone has too few sightings to be useful), looks
 up the actual forest stand each sighting landed in via Metsakeskus's
 point-queryable WFS, and compares that distribution (fertility class,
 development class, species mix, soil, drainage) against Karkkila's own stand
@@ -13,10 +13,12 @@ the model's weighting for that factor; under-represented ones call it into
 question.
 
 Requires a free laji.fi API token in .env as LAJI_FI_TOKEN (see README).
+
+    python scripts/calibrate.py --species suppilovahvero
 """
 
+import argparse
 import json
-import os
 import time
 from pathlib import Path
 
@@ -27,9 +29,10 @@ from pyproj import Transformer
 from shapely.geometry import Point, shape
 
 import build_map as bm
+import species as sp
+from species import PROFILES, SpeciesProfile
 
 ROOT = Path(__file__).resolve().parent.parent
-CACHE_PATH = ROOT / "data" / "cache" / "kantarelli_sightings_with_stands.json"
 
 # Uusimaa + neighbouring Kanta-Hame/Paijat-Hame/western Varsinais-Suomi: the
 # same southern-Finland managed-forest zone Karkkila sits in, so comparing
@@ -51,12 +54,16 @@ def load_token() -> str:
     raise RuntimeError("LAJI_FI_TOKEN not found in .env")
 
 
-def fetch_sightings(token: str) -> list[dict]:
+def cache_path(profile: SpeciesProfile) -> Path:
+    return ROOT / "data" / "cache" / f"{profile.slug}_sightings_with_stands.json"
+
+
+def fetch_sightings(token: str, profile: SpeciesProfile) -> list[dict]:
     sightings = []
     page = 1
     while True:
         resp = requests.get(LAJI_API, params={
-            "target": "Cantharellus cibarius",
+            "target": profile.laji_target,
             "coordinates": BBOX_WGS84,
             "coordinateAccuracyMax": COORDINATE_ACCURACY_MAX_M,
             "pageSize": 1000,
@@ -93,13 +100,14 @@ def lookup_stand(x: float, y: float, buffer_m: float = 25) -> dict | None:
     return None
 
 
-def build_sightings_with_stands(token: str) -> pd.DataFrame:
-    if CACHE_PATH.exists():
-        print(f"Using cached {CACHE_PATH}")
-        return pd.DataFrame(json.loads(CACHE_PATH.read_text()))
+def build_sightings_with_stands(token: str, profile: SpeciesProfile) -> pd.DataFrame:
+    path = cache_path(profile)
+    if path.exists():
+        print(f"Using cached {path}")
+        return pd.DataFrame(json.loads(path.read_text()))
 
-    print("Fetching sightings from laji.fi ...")
-    sightings = fetch_sightings(token)
+    print(f"Fetching {profile.name} sightings from laji.fi ...")
+    sightings = fetch_sightings(token, profile)
     print(f"{len(sightings)} sightings with coordinates")
 
     rows = []
@@ -117,15 +125,19 @@ def build_sightings_with_stands(token: str) -> pd.DataFrame:
         time.sleep(0.05)  # be polite to the WFS
 
     df = pd.DataFrame(rows)
-    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_PATH.write_text(df.to_json(orient="records"))
-    print(f"Matched {len(df)}/{len(sightings)} sightings to a forest stand. Cached to {CACHE_PATH}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(df.to_json(orient="records"))
+    print(f"Matched {len(df)}/{len(sightings)} sightings to a forest stand. Cached to {path}")
     return df
 
 
-def karkkila_background() -> pd.DataFrame:
-    stand, growthplace, treestand, treestandsummary, treestratum = bm.load_layers()
-    scored = bm.score_stands(stand, growthplace, treestand, treestandsummary, treestratum)
+def karkkila_background(profile: SpeciesProfile) -> pd.DataFrame:
+    """Available habitat: every Karkkila stand this species' model does not
+    exclude outright. The exclusions differ per species (kantarelli drops
+    every mire type, suppilovahvero keeps korpi), so the background has to be
+    built per species too."""
+    layers = bm.load_layers()
+    scored = bm.score_stands(*layers, profile=profile)
     return scored[~scored["excluded"]].copy()
 
 
@@ -147,18 +159,33 @@ def to_code_str(series: pd.Series) -> pd.Series:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--species", default="kantarelli", choices=sorted(PROFILES),
+                        help="which species' model to calibrate (default: kantarelli)")
+    profile = PROFILES[parser.parse_args().species]
+
     token = load_token()
-    df = build_sightings_with_stands(token)
-    bg = karkkila_background()
+    df = build_sightings_with_stands(token, profile)
+    bg = karkkila_background(profile)
 
-    print(f"\n{len(df)} sightings matched to a stand; {len(bg)} Karkkila stands as background")
+    print(f"\n=== {profile.name} ({profile.latin}) ===")
+    print(f"{len(df)} sightings matched to a stand; {len(bg)} Karkkila stands as background")
 
-    compare("Kasvupaikka (fertilityclass)", to_code_str(df["FERTILITYCLASS"]), bg["fertilityclass"], bm.LABELS["fertilityclass"])
-    compare("Kehitysluokka (developmentclass)", df["DEVELOPMENTCLASS"], bg["developmentclass"], bm.LABELS["developmentclass"])
-    compare("Vallitseva puulaji (main species)", to_code_str(df["MAINTREESPECIES"]).map(bm.TREESPECIES_LABELS).fillna("Muu"),
-            bg["dominant_species"])
+    compare("Kasvupaikka (fertilityclass)", to_code_str(df["FERTILITYCLASS"]), bg["fertilityclass"], sp.FERTILITY_LABELS)
+    compare("Kehitysluokka (developmentclass)", df["DEVELOPMENTCLASS"], bg["developmentclass"], sp.DEVELOPMENT_LABELS)
+    compare("Vallitseva puulaji (main species)", to_code_str(df["MAINTREESPECIES"]).map(sp.TREESPECIES_LABELS).fillna("Muu"),
+            bg["dominant_species"].map(sp.TREESPECIES_LABELS).fillna("Muu"))
+    compare("Maalaji (soiltype)", to_code_str(df["SOILTYPE"]), bg["soiltype"], sp.SOIL_LABELS)
     compare("Maaryhma (subgroup, 1=kangas)", to_code_str(df["SUBGROUP"]), bg["subgroup"])
-    compare("Kuivatustilanne (drainagestate)", to_code_str(df["DRAINAGESTATE"]), bg["drainagestate"])
+    compare("Kuivatustilanne (drainagestate)", to_code_str(df["DRAINAGESTATE"]), bg["drainagestate"], sp.DRAINAGE_LABELS)
+
+    # the canopy-density curve is calibrated straight off these bands: where
+    # sightings pile up relative to background is where the curve should peak
+    bands = [0, 150, 300, 600, 900, 1400, 2200, 1e9]
+    names = ["<150", "150-300", "300-600", "600-900", "900-1400", "1400-2200", ">2200"]
+    compare("Runkoluku (stemcount, kpl/ha)",
+            pd.cut(df["STEMCOUNT"], bands, labels=names),
+            pd.cut(bg["stemcount"], bands, labels=names))
 
     print("\n=== mean PROPORTIONSPRUCE / PROPORTIONPINE / PROPORTIONOTHER at sighting locations ===")
     print(df[["PROPORTIONSPRUCE", "PROPORTIONPINE", "PROPORTIONOTHER"]].mean().round(3))

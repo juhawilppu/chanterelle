@@ -1,12 +1,19 @@
-"""Score Karkkila forest stands for chanterelle (kantarelli) habitat
-suitability and render the result as a standalone Leaflet HTML map.
+"""Score Karkkila forest stands for mushroom habitat suitability and render
+the result as one standalone Leaflet HTML map with a species switcher.
 
-Habitat heuristic (see README discussion in the chat this script came
-from): chanterelles are mycorrhizal mainly with spruce, favour mesic to
-herb-rich heath forest (OMT/MT), mid-aged to mature stands with an open
-enough canopy for moss to carpet the floor, well-drained mineral soil,
-and often occur near esker/moraine formations. Wet peatland, very young
-or clear-cut stands, and non-forest land are excluded outright.
+The habitat heuristics themselves live in `scripts/species.py`, one profile
+per mushroom; this module is the engine that applies a profile to the forest
+inventory and draws the result. Kantarelli wants dry, light-flooded,
+well-drained mineral soil near eskers; suppilovahvero wants damp, shady,
+moss-floored spruce forest and is at home on peat -- so the two maps
+disagree about most of the municipality, which is the point of having both.
+
+Both species ship in a single HTML file: stand geometry is by far the
+largest part of the payload and is identical between them, so it is written
+once and each species contributes only its own scores. Attributes are
+shipped as inventory codes and turned into Finnish labels in the browser,
+which keeps the file smaller than the single-species map it replaces --
+this thing gets loaded over mobile data, in a forest.
 
 Run scripts/download_data.py first.
 """
@@ -17,133 +24,36 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from shapely.geometry import mapping
+
+import species as sp
+from species import PROFILES, SpeciesProfile
 
 MUNICIPALITY = "Karkkila"
 
 ROOT = Path(__file__).resolve().parent.parent
 GPKG_PATH = ROOT / "data" / "raw" / f"MV_{MUNICIPALITY}" / f"MV_{MUNICIPALITY}.gpkg"
 GTK_FORMATIONS_PATH = ROOT / "data" / "cache" / f"gtk_formations_{MUNICIPALITY}.geojson"
-LAJI_SIGHTINGS_PATH = ROOT / "data" / "cache" / f"laji_sightings_{MUNICIPALITY}.json"
 OUTPUT_GEOJSON = ROOT / "output" / "scored_stands.geojson"
-OUTPUT_HTML = ROOT / "output" / "karkkila_kantarelli_map.html"
+OUTPUT_HTML = ROOT / "output" / "karkkila_sienikartta.html"
 
-ESKER_BUFFER_M = 150
 CURRENT_TREESTAND_CLASS = "2"  # "Nykytilan puusto" = current, as opposed to inventory/forecast
 
-# --- code -> points lookups, derived from the metsätietostandardi code tables ---
+# Only these make it onto the map, in this order: the array index is what the
+# browser gets instead of the category name.
+MAPPED_CATEGORIES = ["excellent", "high", "medium"]
 
-FERTILITY_POINTS = {  # kasvupaikka / fertilityclass
-    # Weights calibrated against real Cantharellus cibarius sightings from
-    # laji.fi (see scripts/calibrate.py): compared against Karkkila's own
-    # stand population, MT-fertility sightings landed almost exactly at
-    # prevalence (well calibrated already), VT was notably under-weighted
-    # here relative to how often real sightings land there, and OMT was
-    # somewhat over-weighted relative to its (high) prevalence.
-    "1": 17,  # Lehto - lush but often too dense/herby
-    "2": 19,  # Lehtomainen kangas (OMT) - good, but not as dominant as raw prevalence suggests
-    "3": 25,  # Tuore kangas (MT) - prime, matches real sightings almost exactly
-    "4": 18,  # Kuivahko kangas (VT) - real sightings favor this more than expected
-    "5": 10,  # Kuiva kangas (CT)
-    "6": 3,   # Karukkokangas
-    "7": 0,   # Kalliomaa ja hietikko
-    "8": 0,   # Lakimetsä ja tunturi
-}
+# Factors whose ratio is species-specific and therefore shipped per species,
+# in the order the browser expects them after [score, category].
+SCORED_FACTORS = ["fertility", "development", "species", "light", "soil"]
 
-DEVELOPMENT_POINTS = {  # developmentclass
-    # Calibrated against laji.fi sightings: the oldest, regeneration-ready
-    # stands (04) were 4x over-represented at real sighting locations
-    # relative to their prevalence -- the strongest single signal in the
-    # calibration -- while 03 (previously tied for best) was slightly
-    # under-represented. 04 is now the top category instead of 03.
-    "02": 10,  # Nuori kasvatusmetsikkö - real sightings avoid this
-    "03": 20,  # Varttunut kasvatusmetsikkö - good, but not the top anymore
-    "04": 25,  # Uudistuskypsä metsikkö - real sightings favor this most
-    "05": 15,  # Suojuspuumetsikkö
-    "ER": 18,  # Eri-ikäisrakenteinen
-    "S0": 5,   # Siemenpuumetsikkö - too open
-    "Y1": 5,   # Ylispuustoinen taimikko
-    "T2": 2,   # Taimikko yli 1.3 m - too young
-}
-EXCLUDED_DEVELOPMENT = {"A0", "T1"}  # Aukea, Taimikko alle 1.3 m
+# ~1 m at this latitude, against stand outlines already simplified to 2 m --
+# invisible on the map, and it takes a third off the size of the file
+COORD_DECIMALS = 5
 
-SOIL_POINTS = {  # soiltype, coarse/well-drained mineral soils score best
-    "10": 15, "11": 15, "12": 15, "30": 14, "31": 14, "32": 14,
-    "20": 9, "21": 9, "22": 9, "23": 8, "24": 7, "40": 8,
-    "50": 8,
-    "70": 7,  # Multamaa - organic-rich, holds moisture, middling for kantarelli
-}
 
-DRAINAGE_MULTIPLIER = {  # drainagestate
-    "1": 1.0,  # Ojittamaton kangas - natural
-    "3": 0.8,  # Ojitettu kangas - ditched, altered hydrology
-    "2": 0.5,  # Soistunut kangas - paludified
-}
-
-EXCLUDED_SUBGROUP = {"2", "3", "4", "5"}  # Korpi, Räme, Neva, Letto - mire types
-
-# Canopy openness ("valoisuus") response to stem density, as a piecewise-linear
-# curve calibrated against stem counts at real laji.fi sighting locations:
-# too sparse = no living mycorrhizal host, too dense = no light on the floor.
-LIGHT_STEMCOUNT_KNOTS = [0, 100, 400, 800, 2000]
-LIGHT_OPENNESS_KNOTS = [0.25, 0.25, 1.0, 1.0, 0.0]
-# Single source of truth for "this factor is green". Used both by the
-# "Excellent" rule (every factor green) and injected into the map's JS for the
-# popup badges, so the category and the dots can never disagree -- they did
-# once, and a stand showing a yellow dot still counted as all-green.
-GREEN_THRESHOLDS = {
-    "fertility": 0.65,
-    "development": 0.65,
-    "species": 0.65,
-    "mixture": 0.55,   # Gini-Simpson tops out near 0.67 in practice
-    "light": 0.75,     # roughly 325-1100 stems/ha, the empirically enriched band
-    "soil": 0.65,
-}
-MID_THRESHOLD = 0.3
-LIGHT_GOOD_THRESHOLD = GREEN_THRESHOLDS["light"]
-LIGHT_MID_THRESHOLD = MID_THRESHOLD
-
-# Share of the raw point total a stand keeps when one factor is at rock
-# bottom. 1.0 would be a pure sum (full compensation between factors);
-# lower values make the worst factor bite harder.
-LIMITING_FLOOR = 0.7
-
-# Point budget per factor. Kept explicit so the "x/100" shown on the map stays
-# honest when factors are added or reweighted.
-ESKER_BONUS_POINTS = 10
-MAX_RAW_SCORE = (
-    25   # fertility (kasvupaikka)
-    + 25  # development class (kehitysluokka)
-    + 10  # species host quality
-    + 15  # sekametsä mixture
-    + 15  # soil x drainage
-    + 10  # valoisuus (canopy openness)
-    + ESKER_BONUS_POINTS
-)
-
-SPECIES_WEIGHT = {  # treespecies -> mycorrhizal-partner weight for kantarelli
-    # Calibrated against real laji.fi sightings (scripts/calibrate.py):
-    # Mänty-dominant stands were 2x over-represented at real sighting
-    # locations relative to their prevalence -- pine is a much stronger
-    # chanterelle host here than a low weight would suggest, raised sharply.
-    # Lehtipuu (unspecified broadleaf) was previously raised on the
-    # assumption that unresolved broadleaf is mostly birch, but real
-    # sightings are 10x LESS common there than prevalence would predict --
-    # that assumption doesn't hold up against the data, so it's lowered
-    # back down, below its original default even.
-    "2": 1.0,   # Kuusi / Norway spruce - main host, matches real sightings closely
-    "1": 0.75,  # Mänty / Scots pine - real sightings show this is a strong host too
-    "3": 0.6,   # Rauduskoivu / silver birch (too few sightings to recalibrate)
-    "4": 0.6,   # Hieskoivu / downy birch (too few sightings to recalibrate)
-    "30": 0.4,  # Havupuu / unspecified conifer - no sighting data to calibrate against
-    "29": 0.2,  # Lehtipuu / unspecified broadleaf - real sightings clearly avoid this
-}
-DEFAULT_SPECIES_WEIGHT = 0.1
-
-TREESPECIES_LABELS = {
-    "1": "Mänty", "2": "Kuusi", "3": "Rauduskoivu", "4": "Hieskoivu",
-    "5": "Haapa", "6": "Harmaaleppä", "7": "Tervaleppä",
-    "29": "Lehtipuu", "30": "Havupuu",
-}
+def laji_sightings_path(profile: SpeciesProfile) -> Path:
+    return ROOT / "data" / "cache" / f"laji_sightings_{MUNICIPALITY}_{profile.slug}.json"
 
 
 def load_layers():
@@ -155,10 +65,10 @@ def load_layers():
     treestand = treestand[treestand["treestandclass"] == CURRENT_TREESTAND_CLASS][
         ["treestandid", "standid", "developmentclass"]
     ]
-    # stemcount (stems/ha) is used as the canopy-openness ("valoisuus") proxy:
-    # a stand can have high basal area from a few big old trees (open, light)
-    # or the same basal area from many small crowded ones (dark) -- stem
-    # density tells those apart, basal area alone does not
+    # stemcount (stems/ha) is used as the canopy-density proxy: a stand can
+    # have high basal area from a few big old trees (open, light) or the same
+    # basal area from many small crowded ones (dark) -- stem density tells
+    # those apart, basal area alone does not
     treestandsummary = gpd.read_file(GPKG_PATH, layer="treestandsummary")[
         ["treestandid", "stemcount"]
     ]
@@ -168,35 +78,38 @@ def load_layers():
     return stand, growthplace, treestand, treestandsummary, treestratum
 
 
-def compute_species_mix(treestand: pd.DataFrame, treestratum: pd.DataFrame) -> pd.DataFrame:
+def compute_species_mix(treestand: pd.DataFrame, treestratum: pd.DataFrame,
+                        profile: SpeciesProfile) -> pd.DataFrame:
     current_ids = set(treestand["treestandid"])
     tt = treestratum[treestratum["treestandid"].isin(current_ids)].copy()
     tt["basalarea"] = tt["basalarea"].fillna(0)
-    tt["weight"] = tt["treespecies"].map(SPECIES_WEIGHT).fillna(DEFAULT_SPECIES_WEIGHT)
+    tt["weight"] = tt["treespecies"].map(profile.species_weight).fillna(profile.species_weight_default)
 
     totals = tt.groupby("treestandid")["basalarea"].sum().rename("total_ba")
     weighted = (tt["basalarea"] * tt["weight"]).groupby(tt["treestandid"]).sum().rename("weighted_ba")
 
     dominant_idx = tt.groupby("treestandid")["basalarea"].idxmax()
     dominant = tt.loc[dominant_idx, ["treestandid", "treespecies"]].set_index("treestandid")
-    dominant["dominant_species"] = dominant["treespecies"].map(TREESPECIES_LABELS).fillna("Muu")
 
     # Gini-Simpson diversity index (1 - sum of squared species shares) over
     # actual basal-area composition: 0 = pure monoculture, closer to 1 = a
-    # genuine "sekametsä" of several well-balanced species. Independent of
-    # SPECIES_WEIGHT/host quality -- this measures mixedness itself.
+    # genuine "sekametsä" of several well-balanced species. Independent of any
+    # species' host weights -- this measures mixedness itself, so it is the
+    # same number on both maps even though they value it differently.
     species_ba = tt.groupby(["treestandid", "treespecies"])["basalarea"].sum()
     shares = species_ba / species_ba.groupby(level="treestandid").transform("sum")
     diversity = (1 - (shares ** 2).groupby(level="treestandid").sum()).rename("diversity_index")
 
-    mix = pd.concat([totals, weighted, diversity], axis=1).join(dominant["dominant_species"])
+    mix = pd.concat([totals, weighted, diversity], axis=1).join(dominant["treespecies"])
     mix["species_fraction"] = (mix["weighted_ba"] / mix["total_ba"]).clip(upper=1).fillna(0)
     mix["diversity_index"] = mix["diversity_index"].fillna(0)
-    return mix.reset_index()
+    return mix.rename(columns={"treespecies": "dominant_species"}).reset_index()
 
 
-def score_stands(stand, growthplace, treestand, treestandsummary, treestratum) -> gpd.GeoDataFrame:
-    species_mix = compute_species_mix(treestand, treestratum)
+def score_stands(stand, growthplace, treestand, treestandsummary, treestratum,
+                 profile: SpeciesProfile) -> gpd.GeoDataFrame:
+    species_mix = compute_species_mix(treestand, treestratum, profile)
+    points = profile.factor_points
 
     df = stand.merge(growthplace, on="standid", how="left")
     df = df.merge(treestand, on="standid", how="left")
@@ -205,44 +118,39 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum) -
 
     excluded = (
         (df["maingroup"] != "1")
-        | df["subgroup"].isin(EXCLUDED_SUBGROUP)
-        | df["developmentclass"].isin(EXCLUDED_DEVELOPMENT)
-        | df["fertilityclass"].isin({"7", "8"})
+        | df["subgroup"].isin(profile.excluded_subgroup)
+        | df["developmentclass"].isin(sp.EXCLUDED_DEVELOPMENT)
+        | df["fertilityclass"].isin(profile.excluded_fertility)
     )
 
-    fertility_score = df["fertilityclass"].map(FERTILITY_POINTS).fillna(6)
-    development_score = df["developmentclass"].map(DEVELOPMENT_POINTS).fillna(8)
-    soil_score = df["soiltype"].map(SOIL_POINTS).fillna(7) * df["drainagestate"].map(DRAINAGE_MULTIPLIER).fillna(0.2)
-    # species contribution is split into host quality (spruce/pine/birch as a
-    # mycorrhizal partner, weighted per SPECIES_WEIGHT) and a separate
-    # "sekametsä" mixture bonus (Gini-Simpson diversity of the actual species
-    # composition) -- a stand can score well on one without the other. The
-    # mixture half now outweighs raw host quality, per specific request to
-    # emphasize genuinely mixed forest over a monoculture of the "best" species.
-    species_quality_score = 10 * df["species_fraction"].fillna(0.3)
-    mixture_score = 15 * df["diversity_index"].fillna(0)
-    # "valoisuus" (light reaching the forest floor): repeatedly cited as
-    # important in foraging sources ("avoid dense dark forest"), but not
-    # captured by development class alone -- a stand can have high basal
-    # area from a few big old trees (open) or many small crowded ones
-    # (dark) at the same age. Stem density is the proxy, and it peaks in a
-    # BAND rather than rising as trees disappear: calibrated against real
-    # laji.fi sightings, 74% fall in 300-800 stems/ha (vs 44% of background),
-    # dropping off sharply above 800 and effectively absent below 300. A
-    # nearly treeless seed-tree stand has plenty of light but no living
-    # mycorrhizal host, so it must not score as "maximally light".
-    openness = pd.Series(
-        np.interp(df["stemcount"], LIGHT_STEMCOUNT_KNOTS, LIGHT_OPENNESS_KNOTS),
+    fertility_score = df["fertilityclass"].map(profile.fertility_points).fillna(profile.default_fertility_points)
+    development_score = df["developmentclass"].map(profile.development_points).fillna(profile.default_development_points)
+    soil_score = (
+        df["soiltype"].map(profile.soil_points).fillna(profile.soil_default)
+        * df["drainagestate"].map(profile.drainage_multiplier).fillna(profile.drainage_default)
+    )
+    # the species contribution is split in two: host quality (how good the
+    # dominant trees are as a mycorrhizal partner, per the profile's weights)
+    # and a separate "sekametsä" mixture term. A stand can score well on one
+    # without the other, and the two species weigh them very differently.
+    species_quality_score = points["species"] * df["species_fraction"].fillna(0.3)
+    mixture_score = points["mixture"] * df["diversity_index"].fillna(0)
+    # Canopy density, via the profile's own stems/ha response curve. It peaks
+    # in a band rather than rising monotonically in either direction: a nearly
+    # treeless stand has all the light in the world but no living mycorrhizal
+    # host, so it must never score as ideal.
+    suitability = pd.Series(
+        np.interp(df["stemcount"], profile.light.stemcount_knots, profile.light.suitability_knots),
         index=df.index,
     ).where(df["stemcount"].notna())
-    light_score = 10 * openness.fillna(0.4)
+    light_score = points["light"] * suitability.fillna(0.4)
 
-    df["fertility_ratio"] = (fertility_score / 25).round(2)
-    df["development_ratio"] = (development_score / 25).round(2)
-    df["species_ratio"] = (species_quality_score / 10).round(2)
-    df["mixture_ratio"] = df["diversity_index"].round(2)
-    df["soil_ratio"] = (soil_score / 15).round(2)
-    df["light_ratio"] = (light_score / 10).round(2)
+    df["fertility_ratio"] = (fertility_score / points["fertility"]).clip(upper=1).round(2)
+    df["development_ratio"] = (development_score / points["development"]).clip(upper=1).round(2)
+    df["species_ratio"] = (species_quality_score / points["species"]).round(2)
+    df["mixture_ratio"] = df["diversity_index"].fillna(0).round(2)
+    df["soil_ratio"] = (soil_score / points["soil"]).clip(upper=1).round(2)
+    df["light_ratio"] = (light_score / points["light"]).round(2)
 
     # Limiting-factor penalty (Liebig's law of the minimum): habitat is
     # limited by its worst attribute, not its average. A plain sum lets a
@@ -253,7 +161,7 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum) -
     # its own green threshold, so "green everywhere" means no penalty at all.
     weakest = pd.concat(
         [(df[f"{factor}_ratio"] / threshold).clip(upper=1)
-         for factor, threshold in GREEN_THRESHOLDS.items()],
+         for factor, threshold in profile.green_thresholds.items()],
         axis=1,
     ).min(axis=1).fillna(0)
 
@@ -261,14 +169,63 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum) -
         fertility_score + development_score + species_quality_score
         + mixture_score + soil_score + light_score
     )
-    df["score"] = (raw * (LIMITING_FLOOR + (1 - LIMITING_FLOOR) * weakest)).round(1)
+    df["score"] = (raw * (sp.LIMITING_FLOOR + (1 - sp.LIMITING_FLOOR) * weakest)).round(1)
     df.loc[excluded, "score"] = 0
     df["excluded"] = excluded
 
     return gpd.GeoDataFrame(df, geometry="geometry", crs=stand.crs)
 
 
-def categorize(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def compute_near_esker(stand: gpd.GeoDataFrame) -> pd.Series:
+    """Proximity to glaciofluvial deposits -- eskers, sandurs, deltas,
+    ice-contact deposits. The point is the *substrate*, not elevation: these
+    are sorted sand and gravel laid down by glacial meltwater rivers, so they
+    drain exceptionally well, which is the soil condition Finnish sources tie
+    to chanterelle-friendly forest.
+
+    The GTK layer also carries moraine (unsorted till) and littoral deposits.
+    Buffering all of them put 62% of Karkkila "near an esker", which made the
+    factor almost meaningless -- and moraine is the opposite of the sorted,
+    free-draining substrate we are actually looking for. Restricting to
+    genuine glaciofluvial deposits brings it to a selective 25%.
+
+    Purely geometric, so it is computed once and handed to whichever species
+    profiles actually use it (suppilovahvero does not -- damp ground is the
+    whole point for it, and free-draining sand is not where it fruits).
+    """
+    if not GTK_FORMATIONS_PATH.exists():
+        return pd.Series(False, index=stand.index)
+    formations = gpd.read_file(GTK_FORMATIONS_PATH).to_crs(stand.crs)
+    deposit_class = formations["DEPOSIT_TYPE_CLASS"].astype(str)
+    glaciofluvial = deposit_class.str.startswith("1") & ~deposit_class.str.startswith("1.5")
+    buffered = formations[glaciofluvial].buffer(sp.ESKER_BUFFER_M).union_all()
+    return stand.geometry.centroid.within(buffered)
+
+
+def add_esker_bonus(gdf: gpd.GeoDataFrame, profile: SpeciesProfile) -> gpd.GeoDataFrame:
+    if not profile.uses_esker:
+        return gdf
+    bonus = gdf["near_esker"] & (~gdf["excluded"])
+    gdf.loc[bonus, "score"] = gdf.loc[bonus, "score"] + profile.esker_points
+    return gdf
+
+
+def normalize_scores(gdf: gpd.GeoDataFrame, profile: SpeciesProfile) -> gpd.GeoDataFrame:
+    """Rescale the raw point total onto a true 0-100 scale.
+
+    The esker bonus used to be added and then clipped at 100, which silently
+    penalised exactly the best stands: once the other factors already summed
+    near the 100-point maximum, part of the +10 was thrown away, so an
+    excellent stand near an esker got less credit for it than a mediocre one.
+    Dividing by the profile's real theoretical maximum keeps every factor's
+    calibrated weight intact and keeps the displayed "x/100" honest -- and it
+    is what lets two species with different point budgets share a scale.
+    """
+    gdf["score"] = (gdf["score"] / profile.max_raw_score * 100).round(1)
+    return gdf
+
+
+def categorize(gdf: gpd.GeoDataFrame, profile: SpeciesProfile) -> gpd.GeoDataFrame:
     """"Excellent" is a hard rule, not a percentile: every single badged
     factor has to be green (its own "good" threshold, matching what the
     popup actually shows), so an "Excellent" stand is explainable purely by
@@ -278,13 +235,15 @@ def categorize(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     score thresholds: Karkkila's forest land is overwhelmingly mesic,
     coarse-mineral-soil spruce/mixed forest, so the raw weighted score
     clusters densely and a fixed cutoff would flag most of the municipality
-    as "high". Relative ranking keeps the map useful for choosing where to go.
+    as "high". Relative ranking keeps the map useful for choosing where to go,
+    and it is per species, so each map ranks stands against the habitat that
+    species actually has available.
     """
     gdf["category"] = "excluded"
     non_excluded = ~gdf["excluded"]
 
-    all_green = gdf["near_esker"].copy()
-    for factor, threshold in GREEN_THRESHOLDS.items():
+    all_green = gdf["near_esker"].copy() if profile.uses_esker else pd.Series(True, index=gdf.index)
+    for factor, threshold in profile.green_thresholds.items():
         all_green &= gdf[f"{factor}_ratio"] >= threshold
     excellent = non_excluded & all_green
     gdf.loc[excellent, "category"] = "excellent"
@@ -297,149 +256,148 @@ def categorize(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return gdf
 
 
-def add_esker_bonus(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Proximity to glaciofluvial deposits -- eskers, sandurs, deltas,
-    ice-contact deposits. The point is the *substrate*, not elevation: these
-    are sorted sand and gravel laid down by glacial meltwater rivers, so they
-    drain exceptionally well, which is the soil condition Finnish sources tie
-    to chanterelle-friendly forest.
+def build_species_frame(layers, near_esker: pd.Series, profile: SpeciesProfile) -> gpd.GeoDataFrame:
+    scored = score_stands(*layers, profile=profile)
+    scored["near_esker"] = near_esker.reindex(scored.index).fillna(False)
+    scored = add_esker_bonus(scored, profile)
+    scored = normalize_scores(scored, profile)
+    return categorize(scored, profile)
 
-    The GTK layer also carries moraine (unsorted till) and littoral deposits.
-    Buffering all of them put 62% of Karkkila "near an esker", which made the
-    factor almost meaningless -- and moraine is the opposite of the sorted,
-    free-draining substrate we are actually looking for. Restricting to
-    genuine glaciofluvial deposits brings it to a selective 25%.
+
+def round_coords(obj, decimals: int = COORD_DECIMALS):
+    if isinstance(obj, (list, tuple)):
+        return [round_coords(o, decimals) for o in obj]
+    return round(obj, decimals)
+
+
+def to_geojson_dict(frames: dict[str, gpd.GeoDataFrame]) -> dict:
+    """One FeatureCollection carrying every species' scores.
+
+    Geometry and the stand's own inventory attributes are identical between
+    species, so they are written once per stand; each species adds a compact
+    [score, category, ...factor ratios] array under its own short key, and is
+    simply absent from stands its own map does not show. A stand is kept if
+    *any* species ranks it, and the browser hides the ones the active species
+    has nothing to say about.
     """
-    if not GTK_FORMATIONS_PATH.exists():
-        gdf["near_esker"] = False
-        return gdf
-    formations = gpd.read_file(GTK_FORMATIONS_PATH).to_crs(gdf.crs)
-    deposit_class = formations["DEPOSIT_TYPE_CLASS"].astype(str)
-    glaciofluvial = deposit_class.str.startswith("1") & ~deposit_class.str.startswith("1.5")
-    formations = formations[glaciofluvial]
-    buffered = formations.buffer(ESKER_BUFFER_M).union_all()
-    centroids = gdf.geometry.centroid
-    gdf["near_esker"] = centroids.within(buffered)
-    bonus = gdf["near_esker"] & (~gdf["excluded"])
-    gdf.loc[bonus, "score"] = gdf.loc[bonus, "score"] + ESKER_BONUS_POINTS
-    return gdf
+    base = next(iter(frames.values()))
+    keep = np.zeros(len(base), dtype=bool)
+    for frame in frames.values():
+        keep |= frame["category"].isin(MAPPED_CATEGORIES).to_numpy()
 
-
-def normalize_scores(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Rescale the raw point total onto a true 0-100 scale.
-
-    The esker bonus used to be added and then clipped at 100, which silently
-    penalised exactly the best stands: once the other factors already summed
-    near the 100-point maximum, part of the +10 was thrown away, so an
-    excellent stand near an esker got less credit for it than a mediocre one.
-    Dividing by the real theoretical maximum keeps every factor's calibrated
-    weight intact and keeps the displayed "x/100" honest.
-    """
-    gdf["score"] = (gdf["score"] / MAX_RAW_SCORE * 100).round(1)
-    return gdf
-
-
-LABELS = {
-    "fertilityclass": {
-        "1": "Lehto", "2": "Lehtomainen kangas (OMT)", "3": "Tuore kangas (MT)",
-        "4": "Kuivahko kangas (VT)", "5": "Kuiva kangas (CT)", "6": "Karukkokangas",
-    },
-    "developmentclass": {
-        "02": "Nuori kasvatusmetsikkö", "03": "Varttunut kasvatusmetsikkö",
-        "04": "Uudistuskypsä metsikkö", "05": "Suojuspuumetsikkö",
-        "ER": "Eri-ikäisrakenteinen", "S0": "Siemenpuumetsikkö",
-        "Y1": "Ylispuustoinen taimikko", "T2": "Taimikko",
-    },
-    "soiltype": {
-        "10": "Karkea kangasmaa", "11": "Karkea moreeni", "12": "Karkea lajittunut maalaji",
-        "30": "Kivinen karkea kangasmaa", "31": "Kivinen karkea moreeni", "32": "Kivinen karkea lajittunut maalaji",
-        "20": "Hienojakoinen kangasmaa", "21": "Hienoainesmoreeni", "22": "Hienojakoinen lajittunut maalaji",
-        "23": "Silttipitoinen maalaji", "24": "Savimaa", "40": "Kivinen hienojakoinen kangasmaa",
-        "50": "Kallio/kivikko",
-    },
-    "drainagestate": {
-        "1": "ojittamaton", "2": "soistunut", "3": "ojitettu",
-    },
-}
-
-
-def mixture_label(diversity_index: float) -> str:
-    if diversity_index >= 0.55:
-        return "Vahva sekametsä"
-    if diversity_index >= 0.3:
-        return "Jonkin verran sekapuustoa"
-    return "Lähes yksipuulajinen"
-
-
-def light_label(light_ratio: float, stemcount: float) -> str:
-    """Openness peaks in a band, so a low ratio means one of two opposite
-    things: too few trees or too many. The label has to say which, or a
-    nearly treeless stand would read as "dense, little light".
-    """
-    if light_ratio >= LIGHT_GOOD_THRESHOLD:
-        return "Avoin, valoisa"
-    if pd.notna(stemcount) and stemcount < LIGHT_STEMCOUNT_KNOTS[2]:
-        return "Hyvin harva puusto"  # too open: little living host left
-    if light_ratio >= LIGHT_MID_THRESHOLD:
-        return "Melko tiheä"
-    return "Tiheä, vähän valoa"
-
-
-def to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
-    # the map only ever shows "high"/"medium" (no user toggle for "low"), so
-    # there's no reason to ship "low" stands to the client at all
-    keep = gdf[gdf["category"].isin(["excellent", "high", "medium"])].copy()
-
+    shown = base.loc[keep].copy()
     # centroid computed in the planar CRS (before simplify/reproject) so it's a
     # true geometric centroid, used as the Google Maps navigation destination
-    centroid_4326 = keep.geometry.centroid.to_crs(4326)
-    keep["lat"] = centroid_4326.y.round(6)
-    keep["lon"] = centroid_4326.x.round(6)
+    centroid_4326 = shown.geometry.centroid.to_crs(4326)
+    shown["lat"] = centroid_4326.y.round(6)
+    shown["lon"] = centroid_4326.x.round(6)
+    shown["geometry"] = shown["geometry"].simplify(2.0)
+    shown = shown.to_crs(4326)
 
-    keep["geometry"] = keep["geometry"].simplify(2.0)
-    keep = keep.to_crs(4326)
+    def code(value):
+        return None if pd.isna(value) else str(value)
 
-    keep["fertility_label"] = keep["fertilityclass"].map(LABELS["fertilityclass"]).fillna("?")
-    keep["development_label"] = keep["developmentclass"].map(LABELS["developmentclass"]).fillna("?")
-    keep["soil_label"] = (
-        keep["soiltype"].map(LABELS["soiltype"]).fillna("?") + " ("
-        + keep["drainagestate"].map(LABELS["drainagestate"]).fillna("?") + ")"
-    )
-    # label from the same rounded value the badge uses, or values just under a
-    # threshold round up to green while the text still says otherwise
-    keep["mixture_label"] = keep["mixture_ratio"].map(mixture_label)
-    keep["light_label"] = [
-        light_label(r, s) for r, s in zip(keep["light_ratio"], keep["stemcount"])
-    ]
+    def number(value, decimals=None):
+        if pd.isna(value):
+            return None
+        return round(float(value), decimals) if decimals is not None else float(value)
 
-    # age and area don't feed the score at all (development class already
-    # captures stand-age effects; area is purely descriptive) -- not shipped.
-    # diversity_index itself isn't shipped either -- mixture_ratio is the
-    # same number, already rounded, and nothing client-side needs both.
-    out_cols = [
-        "standid", "score", "category", "fertility_label", "development_label",
-        "dominant_species", "near_esker", "lat", "lon", "geometry",
-        "fertility_ratio", "development_ratio", "species_ratio", "mixture_ratio",
-        "soil_ratio", "soil_label", "mixture_label",
-        "light_ratio", "light_label",
-    ]
-    keep = keep[out_cols]
-    return json.loads(keep.to_json())
+    blocks = {}
+    for slug, frame in frames.items():
+        rows = frame.loc[keep]
+        blocks[slug] = [
+            None if cat not in MAPPED_CATEGORIES else
+            [round(float(score), 1), MAPPED_CATEGORIES.index(cat)]
+            + [round(float(r), 2) for r in ratios]
+            for cat, score, *ratios in zip(
+                rows["category"], rows["score"],
+                *[rows[f"{factor}_ratio"] for factor in SCORED_FACTORS],
+            )
+        ]
+
+    features = []
+    for i, (_, row) in enumerate(shown.iterrows()):
+        # age, area and basal area don't feed any score (development class
+        # already captures stand-age effects) -- not shipped. Neither is
+        # anything that can be derived in the browser from what is.
+        props = {
+            "id": int(row["standid"]),
+            "lat": row["lat"], "lon": row["lon"],
+            "fc": code(row["fertilityclass"]),
+            "dc": code(row["developmentclass"]),
+            "ts": code(row["dominant_species"]),
+            "st": code(row["soiltype"]),
+            "ds": code(row["drainagestate"]),
+            "div": number(row["mixture_ratio"], 2),
+            "stem": None if pd.isna(row["stemcount"]) else int(row["stemcount"]),
+            "esk": int(bool(row["near_esker"])),
+        }
+        for slug, block in blocks.items():
+            if block[i] is not None:
+                props[PROFILES[slug].map_key] = block[i]
+        features.append({
+            "type": "Feature",
+            "properties": props,
+            "geometry": {
+                "type": row.geometry.geom_type,
+                "coordinates": round_coords(mapping(row.geometry)["coordinates"]),
+            },
+        })
+    return {"type": "FeatureCollection", "features": features}
 
 
-def load_sightings_geojson() -> dict:
-    if not LAJI_SIGHTINGS_PATH.exists():
+def load_sightings_geojson(profile: SpeciesProfile) -> dict:
+    path = laji_sightings_path(profile)
+    if not path.exists():
         return {"type": "FeatureCollection", "features": []}
-    sightings = json.loads(LAJI_SIGHTINGS_PATH.read_text())
+    sightings = json.loads(path.read_text())
     features = [
         {
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": [s["lon"], s["lat"]]},
-            "properties": {"date": s["date"], "standid": s["standid"]},
+            "properties": {"date": s["date"]},
         }
         for s in sightings
     ]
     return {"type": "FeatureCollection", "features": features}
+
+
+def species_config() -> list[dict]:
+    """Everything the page needs to know about a species: how to read its
+    score block, where its badges turn green, and what to call things."""
+    return [
+        {
+            "slug": profile.slug,
+            "name": profile.name,
+            "latin": profile.latin,
+            "intro": profile.intro,
+            "key": profile.map_key,
+            "green": profile.green_thresholds,
+            "light": {
+                "row": profile.light.row_label,
+                "good": profile.light.label_good,
+                "mid": profile.light.label_mid,
+                "poor": profile.light.label_poor,
+                "sparseStems": profile.light.sparse_stems,
+                "sparse": profile.light.label_sparse,
+            },
+            "esker": list(profile.esker_row_labels) if profile.uses_esker else None,
+            "sightings": load_sightings_geojson(profile),
+        }
+        for profile in PROFILES.values()
+    ]
+
+
+def label_config() -> dict:
+    return {
+        "fertility": sp.FERTILITY_LABELS,
+        "development": sp.DEVELOPMENT_LABELS,
+        "soil": sp.SOIL_LABELS,
+        "drainage": sp.DRAINAGE_LABELS,
+        "species": sp.TREESPECIES_LABELS,
+        "mixtureBands": sp.MIXTURE_BANDS,
+        "mixtureFallback": sp.MIXTURE_FALLBACK,
+    }
 
 
 HTML_TEMPLATE = """<!doctype html>
@@ -447,7 +405,7 @@ HTML_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Karkkila kantarelli-todennäköisyyskartta</title>
+<title>Karkkilan sienikartta</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root {
@@ -465,6 +423,25 @@ HTML_TEMPLATE = """<!doctype html>
      Muting the tiles keeps every road, path and label legible while letting
      the stand polygons read as the data layer they are. */
   .leaflet-tile-pane { filter: saturate(.45) brightness(1.06) contrast(.94); }
+
+  /* --- species switcher ------------------------------------------------ */
+  /* Top centre: the one control on the map, and the thing that decides what
+     every colour on screen means, so it sits above the map rather than
+     inside the legend where it would read as another caption. */
+  .species-switch { position: fixed; top: calc(10px + env(safe-area-inset-top, 0px));
+                    left: 50%; transform: translateX(-50%); z-index: 1000;
+                    display: flex; gap: 3px; padding: 3px; max-width: calc(100vw - 24px);
+                    background: rgba(255,255,255,.94); border-radius: 999px;
+                    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+                    box-shadow: 0 2px 14px rgba(23,35,28,.18), inset 0 0 0 1px rgba(23,35,28,.06); }
+  .species-switch button { flex: 0 1 auto; min-width: 0; appearance: none; border: none;
+                           padding: 9px 17px; border-radius: 999px; background: none;
+                           font: inherit; font-size: 14px; font-weight: 600; color: var(--ink-soft);
+                           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                           cursor: pointer; transition: background .15s, color .15s; }
+  .species-switch button:hover { color: var(--ink); }
+  .species-switch button[aria-selected="true"] { background: var(--forest); color: #fff;
+                           box-shadow: 0 1px 4px rgba(31,81,54,.32); }
 
   /* --- legend ---------------------------------------------------------- */
   .legend { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000;
@@ -552,9 +529,17 @@ HTML_TEMPLATE = """<!doctype html>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const STANDS = __GEOJSON__;
-const SIGHTINGS = __SIGHTINGS__;
-const GREEN = __GREEN_THRESHOLDS__;  // injected from Python: single source of truth
+const SPECIES = __SPECIES__;   // one entry per mushroom, in switcher order
+const LABELS = __LABELS__;     // inventory code -> Finnish, expanded here rather
+                               // than repeated on every stand in the payload
 const MID = __MID_THRESHOLD__;
+const STORAGE_KEY = "karkkila-sienikartta-species";
+
+// Each species' scores ride along as a compact array under its own key:
+// [score, category index, then one ratio per scored factor].
+const SCORE = 0, CATEGORY = 1;
+const RATIO = { fertility: 2, development: 3, species: 4, light: 5, soil: 6 };
+const CATEGORIES = __CATEGORIES__;
 
 // An ordered ramp rather than three unrelated hues: the colour cools and
 // darkens as the category improves (chanterelle gold -> yellow-green -> deep
@@ -562,6 +547,8 @@ const MID = __MID_THRESHOLD__;
 // previous palette paired bright lime with dark green and said nothing about
 // their order. Per category: `fill` paints the polygon and legend swatch,
 // `line` its outline, `ink` carries text on the popup's `tint` background.
+// Shared by both species: the ramp means "probability", and giving each
+// mushroom its own hues would make the two maps harder to compare, not easier.
 const PALETTE = {
   excellent: { fill: "#15653a", line: "#0e4527", ink: "#0f4a2a", tint: "#e6f1ea" },
   high:      { fill: "#5aa84a", line: "#3d7c31", ink: "#2f6b28", tint: "#ecf5e8" },
@@ -580,22 +567,29 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
 }).addTo(map);
 
-function style(feature) {
-  const p = feature.properties;
-  const c = pal(p.category);
-  return {
-    color: c.line,
-    weight: 1,
-    opacity: 0.6,
-    fillColor: c.fill,
-    fillOpacity: FILL_OPACITY[p.category] ?? 0.45,
-  };
+function mixtureLabel(diversity) {
+  for (const [threshold, label] of LABELS.mixtureBands) {
+    if (diversity >= threshold) return label;
+  }
+  return LABELS.mixtureFallback;
+}
+
+// A low light/shade ratio means one of two opposite things -- too few trees or
+// the wrong kind of canopy -- and the label has to say which, or a nearly
+// treeless stand reads as "dense, little light" on the kantarelli map and as
+// "shady spruce" on the suppilovahvero one.
+function lightLabel(cfg, ratio, stemcount) {
+  const light = cfg.light;
+  if (ratio >= cfg.green.light) return light.good;
+  if (stemcount != null && stemcount < light.sparseStems) return light.sparse;
+  return ratio >= MID ? light.mid : light.poor;
 }
 
 // ratio is this field's contribution to the score, 0-1 relative to its own
 // max -- null means "not a scored factor", so no badge is shown. Thresholds
-// come from GREEN/MID, injected from the same Python constants the
-// "Erinomainen" rule uses, so a category and its dots can never disagree.
+// come from the active species' own green/mid cutoffs, injected from the same
+// Python constants the "Erinomainen" rule uses, so a category and its dots can
+// never disagree.
 function scoreBadge(ratio, good) {
   // an invisible dot rather than none at all, so an unscored row still lines
   // its text up with the scored ones above and below it
@@ -610,71 +604,90 @@ function popupRow(label, value, ratio, good) {
     `<span class="popup-value">${value}</span></div></div>`;
 }
 
-function onEachFeature(feature, layer) {
-  const p = feature.properties;
+function popupHtml(p, cfg) {
+  const v = p[cfg.key];
+  const category = CATEGORIES[v[CATEGORY]];
+  const soil = `${LABELS.soil[p.st] || "?"} (${LABELS.drainage[p.ds] || "?"})`;
   const rows = [
-    popupRow("Kasvupaikka", p.fertility_label, p.fertility_ratio, GREEN.fertility),
-    popupRow("Kehitysluokka", p.development_label, p.development_ratio, GREEN.development),
-    popupRow("Vallitseva puulaji", p.dominant_species, p.species_ratio, GREEN.species),
-    popupRow("Sekametsäisyys", p.mixture_label, p.mixture_ratio, GREEN.mixture),
-    popupRow("Valoisuus", p.light_label, p.light_ratio, GREEN.light),
-    popupRow("Maaperä", p.soil_label, p.soil_ratio, GREEN.soil),
-    // binary factor: green when near an esker, red when not
-    popupRow(
-      "Sijainti",
-      p.near_esker ? "Lähellä harju-/reunamuodostumaa" : "Ei lähellä harjumuodostumaa",
-      p.near_esker ? 1 : 0,
-      1
-    ),
+    popupRow("Kasvupaikka", LABELS.fertility[p.fc] || "?", v[RATIO.fertility], cfg.green.fertility),
+    popupRow("Kehitysluokka", LABELS.development[p.dc] || "?", v[RATIO.development], cfg.green.development),
+    popupRow("Vallitseva puulaji", LABELS.species[p.ts] || "Muu", v[RATIO.species], cfg.green.species),
+    popupRow("Sekametsäisyys", mixtureLabel(p.div), p.div, cfg.green.mixture),
+    popupRow(cfg.light.row, lightLabel(cfg, v[RATIO.light], p.stem), v[RATIO.light], cfg.green.light),
+    popupRow("Maaperä", soil, v[RATIO.soil], cfg.green.soil),
   ];
+  // binary factor, and only for the species whose model uses it: green when
+  // near an esker, red when not
+  if (cfg.esker) {
+    rows.push(popupRow("Sijainti", p.esk ? cfg.esker[0] : cfg.esker[1], p.esk ? 1 : 0, 1));
+  }
 
-  const c = pal(p.category);
-  layer.bindPopup(
-    `<div class="popup-header" style="--cat:${c.fill};--cat-ink:${c.ink};--cat-tint:${c.tint}">` +
-    `<span class="popup-cat">${CATEGORY_LABELS[p.category] || p.category}</span>` +
-    `<span class="popup-score">${Math.round(p.score)}<em>/100</em></span>` +
-    `</div>` +
-    `<div class="popup-body">` +
-    rows.join("") +
+  const c = pal(category);
+  return `<div class="popup-header" style="--cat:${c.fill};--cat-ink:${c.ink};--cat-tint:${c.tint}">` +
+    `<span class="popup-cat">${CATEGORY_LABELS[category] || category}</span>` +
+    `<span class="popup-score">${Math.round(v[SCORE])}<em>/100</em></span>` +
+    `</div><div class="popup-body">` + rows.join("") +
     `<a class="gmaps-btn" target="_blank" rel="noopener" ` +
     `href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}&travelmode=driving">` +
-    `Navigoi tänne &middot; Google Maps</a>` +
-    `</div>`,
-    { minWidth: 258 }
-  );
+    `Navigoi tänne &middot; Google Maps</a></div>`;
 }
 
-// no layer toggle: STANDS already only contains "high"/"medium" stands
-const layer = L.geoJSON(STANDS, { style, onEachFeature }).addTo(map);
-map.fitBounds(layer.getBounds());
+// One Leaflet layer per species, built on first use and kept afterwards, so
+// flipping back and forth costs nothing. A stand the active species has no
+// score for is simply not in its layer.
+const layers = new Map();
+function speciesLayer(cfg) {
+  if (!layers.has(cfg.slug)) {
+    const stands = L.geoJSON(STANDS, {
+      filter: (feature) => feature.properties[cfg.key] != null,
+      style: (feature) => {
+        const category = CATEGORIES[feature.properties[cfg.key][CATEGORY]];
+        const c = pal(category);
+        return { color: c.line, weight: 1, opacity: 0.6,
+                 fillColor: c.fill, fillOpacity: FILL_OPACITY[category] ?? 0.45 };
+      },
+      onEachFeature: (feature, layer) =>
+        // the switcher and the legend are fixed overlays Leaflet knows nothing
+        // about, so autopan has to be told to keep the popup clear of both --
+        // without this a popup near the top edge opens with its score hidden
+        // behind the species buttons
+        layer.bindPopup(popupHtml(feature.properties, cfg), {
+          minWidth: 258,
+          autoPanPaddingTopLeft: L.point(12, 72),
+          autoPanPaddingBottomRight: L.point(12, 150),
+        }),
+    });
+    // Real laji.fi sighting flags for this species, where a report happens to
+    // fall inside the municipality
+    const sightings = L.geoJSON(cfg.sightings, {
+      pointToLayer: (feature, latlng) => L.marker(latlng, {
+        icon: L.divIcon({ className: "", html: '<div class="sighting-flag">🚩</div>', iconSize: [20, 20], iconAnchor: [4, 18] }),
+      }),
+      onEachFeature: (feature, layer) => {
+        const d = feature.properties.date || "tuntematon ajankohta";
+        layer.bindPopup(
+          `<div class="popup-note"><b>${cfg.name}havainto</b>` +
+          `<span>Ilmoitettu laji.fi-palveluun<br>${d}</span></div>`
+        );
+      },
+    });
+    layers.set(cfg.slug, { stands, sightings });
+  }
+  return layers.get(cfg.slug);
+}
 
-// Real laji.fi kantarelli sighting flags, where a report happens to fall
-// inside a stand shown on the map
-L.geoJSON(SIGHTINGS, {
-  pointToLayer: (feature, latlng) => L.marker(latlng, {
-    icon: L.divIcon({ className: "", html: '<div class="sighting-flag">🚩</div>', iconSize: [20, 20], iconAnchor: [4, 18] }),
-  }),
-  onEachFeature: (feature, layer) => {
-    const d = feature.properties.date || "tuntematon ajankohta";
-    layer.bindPopup(
-      `<div class="popup-note"><b>Kantarellihavainto</b>` +
-      `<span>Ilmoitettu laji.fi-palveluun<br>${d}</span></div>`
-    );
-  },
-}).addTo(map);
-
+// --- legend ------------------------------------------------------------
 const legend = document.createElement("div");
 legend.className = "legend";
 legend.innerHTML =
   '<button class="legend-close" aria-label="Piilota selite">×</button>' +
-  '<span class="legend-title">Kantarelli-todennäköisyys</span>' +
+  '<span class="legend-title"></span>' +
   '<div class="legend-row">' +
   `<span><span class="swatch" style="background:${PALETTE.excellent.fill}"></span>Erinomainen</span>` +
   `<span><span class="swatch" style="background:${PALETTE.high.fill}"></span>Korkea</span>` +
   `<span><span class="swatch" style="background:${PALETTE.medium.fill}"></span>Kohtalainen</span>` +
-  "<span>🚩 Ilmoitettu löytö (laji.fi)</span>" +
-  "</div>" +
-  "<small>Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) perustuva arvio - ei mittaustietoa itiöemistä.</small>";
+  '<span>🚩 Ilmoitettu löytö (laji.fi)</span>' +
+  "</div><small></small>";
 document.body.appendChild(legend);
 
 // closing hides it for the rest of this page view; no reopen button, since a
@@ -682,6 +695,58 @@ document.body.appendChild(legend);
 legend.querySelector(".legend-close").addEventListener("click", () => {
   legend.hidden = true;
 });
+
+// --- species switcher --------------------------------------------------
+const switcher = document.createElement("div");
+switcher.className = "species-switch";
+switcher.setAttribute("role", "tablist");
+switcher.setAttribute("aria-label", "Valitse laji");
+document.body.appendChild(switcher);
+
+let active = null;
+
+function selectSpecies(cfg, { fit = false } = {}) {
+  if (active === cfg) return;
+  if (active) {
+    const previous = speciesLayer(active);
+    map.removeLayer(previous.stands);
+    map.removeLayer(previous.sightings);
+  }
+  map.closePopup();
+  active = cfg;
+
+  const layer = speciesLayer(cfg);
+  layer.stands.addTo(map);
+  layer.sightings.addTo(map);
+  if (fit) map.fitBounds(layer.stands.getBounds());
+
+  legend.querySelector(".legend-title").textContent = `${cfg.name}-todennäköisyys`;
+  legend.querySelector("small").textContent =
+    `${cfg.intro} Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) ` +
+    "perustuva arvio - ei mittaustietoa itiöemistä.";
+  for (const button of switcher.children) {
+    button.setAttribute("aria-selected", String(button.dataset.slug === cfg.slug));
+  }
+  try { localStorage.setItem(STORAGE_KEY, cfg.slug); } catch (e) { /* private mode */ }
+}
+
+for (const cfg of SPECIES) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = cfg.name;
+  button.dataset.slug = cfg.slug;
+  button.setAttribute("role", "tab");
+  button.setAttribute("aria-selected", "false");
+  button.title = cfg.latin;
+  button.addEventListener("click", () => selectSpecies(cfg));
+  switcher.appendChild(button);
+}
+
+// remember the last choice: the same person walks back into the same forest
+// looking for the same mushroom
+let remembered = null;
+try { remembered = localStorage.getItem(STORAGE_KEY); } catch (e) { /* private mode */ }
+selectSpecies(SPECIES.find((s) => s.slug === remembered) || SPECIES[0], { fit: true });
 
 // Live location: read the browser's geolocation and refresh a "you are here"
 // dot every 30s. file:// and localhost both count as secure contexts, so
@@ -727,30 +792,34 @@ setInterval(updateLocation, LOCATION_REFRESH_MS);
 """
 
 
-def render_html(geojson_dict: dict, sightings_dict: dict) -> str:
+def render_html(geojson_dict: dict) -> str:
     html = HTML_TEMPLATE.replace("__GEOJSON__", json.dumps(geojson_dict, ensure_ascii=False))
-    html = html.replace("__SIGHTINGS__", json.dumps(sightings_dict, ensure_ascii=False))
-    html = html.replace("__GREEN_THRESHOLDS__", json.dumps(GREEN_THRESHOLDS))
-    return html.replace("__MID_THRESHOLD__", json.dumps(MID_THRESHOLD))
+    html = html.replace("__SPECIES__", json.dumps(species_config(), ensure_ascii=False))
+    html = html.replace("__LABELS__", json.dumps(label_config(), ensure_ascii=False))
+    html = html.replace("__CATEGORIES__", json.dumps(MAPPED_CATEGORIES))
+    return html.replace("__MID_THRESHOLD__", json.dumps(sp.MID_THRESHOLD))
 
 
 def main() -> None:
-    stand, growthplace, treestand, treestandsummary, treestratum = load_layers()
-    scored = score_stands(stand, growthplace, treestand, treestandsummary, treestratum)
-    scored = add_esker_bonus(scored)
-    scored = normalize_scores(scored)
-    scored = categorize(scored)
+    layers = load_layers()
+    near_esker = compute_near_esker(layers[0])
 
-    print(scored["category"].value_counts(dropna=False))
+    frames = {}
+    for slug, profile in PROFILES.items():
+        frames[slug] = build_species_frame(layers, near_esker, profile)
+        counts = frames[slug]["category"].value_counts(dropna=False)
+        print(f"\n=== {profile.name} ===")
+        print(counts.to_string())
 
     OUTPUT_GEOJSON.parent.mkdir(parents=True, exist_ok=True)
-    geojson_dict = to_geojson_dict(scored)
-    sightings_dict = load_sightings_geojson()
+    geojson_dict = to_geojson_dict(frames)
     OUTPUT_GEOJSON.write_text(json.dumps(geojson_dict, ensure_ascii=False), encoding="utf-8")
-    OUTPUT_HTML.write_text(render_html(geojson_dict, sightings_dict), encoding="utf-8")
-    print(f"Wrote {OUTPUT_GEOJSON}")
-    print(f"Wrote {OUTPUT_HTML}")
-    print(f"{len(sightings_dict['features'])} laji.fi sightings embedded as flags")
+    OUTPUT_HTML.write_text(render_html(geojson_dict), encoding="utf-8")
+
+    print(f"\nWrote {OUTPUT_GEOJSON} ({len(geojson_dict['features'])} stands, both species)")
+    print(f"Wrote {OUTPUT_HTML} ({OUTPUT_HTML.stat().st_size / 1e6:.1f} MB)")
+    for cfg in species_config():
+        print(f"  {cfg['name']}: {len(cfg['sightings']['features'])} laji.fi sightings embedded as flags")
 
 
 if __name__ == "__main__":
