@@ -30,6 +30,7 @@ from shapely.geometry import Point, shape
 
 import build_map as bm
 import species as sp
+import topography as topo
 from species import PROFILES, SpeciesProfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -146,6 +147,46 @@ def build_sightings_with_stands(token: str, profile: SpeciesProfile) -> pd.DataF
     return df
 
 
+def sighting_terrain(profile: SpeciesProfile, sightings: pd.DataFrame) -> pd.DataFrame:
+    """Landform metrics at each sighting, read from the same elevation model
+    the map uses, with the same kernels -- otherwise presence and background
+    would not be measuring the same thing."""
+    path = (ROOT / "data" / "cache" /
+            f"{profile.slug}_sighting_terrain_{COORDINATE_ACCURACY_MAX_M}m.json")
+    if path.exists():
+        print(f"Using cached {path}")
+        return pd.DataFrame(json.loads(path.read_text()))
+
+    print(f"Reading terrain at {len(sightings)} {profile.name} sighting locations ...")
+    x, y = WGS84_TO_TM35FIN.transform(sightings["lon"].to_numpy(), sightings["lat"].to_numpy())
+    metrics = topo.metrics_at_points(x, y)
+    df = pd.DataFrame({k: v.astype(float) for k, v in metrics.items()})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(df.to_json(orient="records"))
+    print(f"Cached to {path}")
+    return df
+
+
+def compare_terrain(presence: pd.DataFrame, background: pd.DataFrame) -> None:
+    """Terrain metrics are continuous, so they are compared as binned
+    distributions rather than by code table."""
+    bins = {
+        "tpi_small (m vs 150 m surroundings)": [-99, -3, -1, 1, 3, 99],
+        "tpi_large (m vs 500 m surroundings)": [-99, -6, -2, 2, 6, 99],
+        "slope (deg)": [0, 2, 4, 7, 12, 90],
+        "northness (+1 = due north)": [-1.01, -0.5, 0, 0.5, 1.01],
+    }
+    for label, edges in bins.items():
+        column = label.split(" ")[0]
+        cut = lambda s: pd.cut(s, edges)  # noqa: E731
+        p = cut(presence[column]).value_counts(normalize=True).mul(100)
+        b = cut(background[column]).value_counts(normalize=True).mul(100)
+        both = pd.concat([p, b], axis=1, keys=["presence_%", "background_%"]).fillna(0)
+        both["enrichment"] = (both["presence_%"] / both["background_%"].replace(0, float("nan"))).round(2)
+        print(f"\n=== {label} ===")
+        print(both.round(1).sort_index().to_string())
+
+
 def karkkila_background(profile: SpeciesProfile) -> pd.DataFrame:
     """Available habitat: every Karkkila stand this species' model does not
     exclude outright. The exclusions differ per species (kantarelli drops
@@ -201,6 +242,8 @@ def main() -> None:
     compare("Runkoluku (stemcount, kpl/ha)",
             pd.cut(df["STEMCOUNT"], bands, labels=names),
             pd.cut(bg["stemcount"], bands, labels=names))
+
+    compare_terrain(sighting_terrain(profile, df), bg)
 
     print("\n=== mean PROPORTIONSPRUCE / PROPORTIONPINE / PROPORTIONOTHER at sighting locations ===")
     print(df[["PROPORTIONSPRUCE", "PROPORTIONPINE", "PROPORTIONOTHER"]].mean().round(3))

@@ -63,6 +63,14 @@ MIXTURE_FALLBACK = "Lähes yksipuulajinen"
 EXCLUDED_DEVELOPMENT = {"A0", "T1"}  # Aukea, Taimikko alle 1.3 m -- no forest floor yet
 MID_THRESHOLD = 0.3  # ratio below which a factor's badge turns red, for every species
 
+# Factors the limiting-factor penalty is measured over. Liebig's law is about
+# necessities -- a stand with no light, or no host tree, cannot be rescued by
+# its other qualities. Landform is not one of those: it is a proxy for drainage
+# and exposure, conditions the soil and fertility factors already speak to, so
+# letting it veto an otherwise excellent stand punishes the same weakness twice
+# and (measurably) dilutes the top of the map.
+LIMITING_FACTORS = ("fertility", "development", "species", "mixture", "light", "soil")
+
 # Share of the raw point total a stand keeps when one factor is at rock
 # bottom. 1.0 would be a pure sum (full compensation between factors);
 # lower values make the worst factor bite harder (Liebig's law of the minimum).
@@ -95,6 +103,45 @@ class LightProfile:
 
 
 @dataclass(frozen=True)
+class TerrainProfile:
+    """Where in the landscape the stand sits, from the 10 m elevation model.
+
+    The forest inventory cannot tell a dry crest from the damp hollow below it
+    -- both can carry the same spruce on the same soil -- so this is the one
+    factor with any chance of separating two mushrooms that want the same kind
+    of forest for different reasons. Two piecewise-linear responses, on
+    landform position (TPI) and on slope, combined by `tpi_weight`.
+    """
+
+    tpi_knots: list[float]
+    tpi_suitability: list[float]
+    slope_knots: list[float]
+    slope_suitability: list[float]
+    tpi_weight: float          # the rest of the weight goes to slope
+    row_label: str
+    # Landform wording is a description of the ground, not of how good it is,
+    # so both species share LANDFORM_BANDS below and this only names the row.
+
+
+# Landform description from TPI at the 500 m scale, in metres above or below
+# the surrounding terrain. Shared by both species: it says what the ground is,
+# not whether the mushroom likes it.
+LANDFORM_BANDS = [
+    (8, "Laki tai selänne"),
+    (3, "Ylärinne"),
+    (1, "Loiva kohouma"),
+    (-1, "Ympäristönsä tasossa"),
+    (-3, "Loiva painauma"),
+    (-8, "Painanne"),
+]
+LANDFORM_FALLBACK = "Syvä notko"
+# Appended to the landform when the ground actually falls somewhere, from slope
+# in degrees. Below the last threshold the landform wording says enough on its
+# own and a redundant "flat" only makes the row longer.
+SLOPE_BANDS = [(11, "jyrkkä"), (7, "viettävä"), (4, "loivasti viettävä")]
+
+
+@dataclass(frozen=True)
 class SpeciesProfile:
     slug: str
     map_key: str         # short property key this species' scores ship under
@@ -119,6 +166,8 @@ class SpeciesProfile:
     species_points: float
     light_points: float
     light: LightProfile
+    terrain_points: float
+    terrain: TerrainProfile
 
     green_thresholds: dict[str, float]
     esker_points: float = 0.0
@@ -136,6 +185,7 @@ class SpeciesProfile:
             "mixture": self.mixture_points,
             "light": self.light_points,
             "soil": max(self.soil_points.values()),
+            "terrain": self.terrain_points,
         }
 
     @property
@@ -245,6 +295,27 @@ KANTARELLI = SpeciesProfile(
         sparse_stems=400,
         label_sparse="Hyvin harva puusto",
     ),
+    terrain_points=15,
+    terrain=TerrainProfile(
+        # Calibrated against sighting locations sampled from the 10 m
+        # elevation model. The clearest terrain signal for either species is
+        # what they AVOID: ground sitting 3 m or more below its surroundings
+        # holds a quarter of Karkkila's forest but only an eighth of the
+        # sightings (0.5x), which is a stronger depletion than any soil or
+        # fertility class shows. Depressions here are wet, and wet is where
+        # neither of these mushrooms fruits. Level to gently raised ground is
+        # the sweet spot (1.6-1.7x); crests fall back slightly, being thin and
+        # dry.
+        tpi_knots=[-25, -8, -3, -1, 2, 8, 25],
+        tpi_suitability=[0.25, 0.3, 0.55, 1.0, 1.0, 0.8, 0.7],
+        # Slope barely moves kantarelli sightings at all (0.9-1.1x across the
+        # range), so it is kept as a gentle preference rather than a real
+        # constraint, and weighted low against TPI below.
+        slope_knots=[0, 1, 3, 9, 14, 30],
+        slope_suitability=[0.75, 0.9, 1.0, 1.0, 0.8, 0.6],
+        tpi_weight=0.75,
+        row_label="Maastonmuoto",
+    ),
     green_thresholds={
         "fertility": 0.65,
         "development": 0.65,
@@ -252,6 +323,7 @@ KANTARELLI = SpeciesProfile(
         "mixture": 0.55,   # Gini-Simpson tops out near 0.67 in practice
         "light": 0.75,     # roughly 325-1100 stems/ha, the empirically enriched band
         "soil": 0.65,
+        "terrain": 0.7,     # level or gently raised ground, not a depression
     },
     esker_points=10,
     esker_row_labels=("Lähellä harju-/reunamuodostumaa", "Ei lähellä harjumuodostumaa"),
@@ -373,6 +445,26 @@ SUPPILOVAHVERO = SpeciesProfile(
         sparse_stems=350,
         label_sparse="Hyvin harva puusto",
     ),
+    terrain_points=15,
+    terrain=TerrainProfile(
+        # Same avoidance of depressions as kantarelli (0.6x below -3 m), which
+        # is the opposite of what the "damp hollows and ditch banks" reputation
+        # predicts -- see the note on the species comparison in README. The
+        # peak sits slightly further up the hillside than kantarelli's (3-8 m
+        # above the surroundings, 1.4x).
+        tpi_knots=[-25, -8, -3, 0, 4, 10, 25],
+        tpi_suitability=[0.3, 0.35, 0.6, 0.85, 1.0, 1.0, 0.85],
+        # This is the one terrain metric where the two species measurably
+        # differ: suppilovahvero sightings avoid flat ground (0.6x below 2
+        # degrees) and favour distinctly sloping ground (1.5x at 7-11
+        # degrees), while kantarelli is indifferent to slope. The effect is
+        # small -- a head-to-head AUC of 0.553 between the two species -- so
+        # it is weighted as a real but modest preference.
+        slope_knots=[0, 1, 3, 7, 12, 20, 30],
+        slope_suitability=[0.5, 0.7, 0.95, 1.0, 1.0, 0.85, 0.7],
+        tpi_weight=0.6,
+        row_label="Maastonmuoto",
+    ),
     green_thresholds={
         "fertility": 0.7,   # MT, VT and OMT
         # Only uudistuskypsä (04) counts as green here. That is a hard line --
@@ -386,6 +478,7 @@ SUPPILOVAHVERO = SpeciesProfile(
         "mixture": 0.45,
         "light": 0.75,      # roughly 300-1200 stems/ha
         "soil": 0.75,       # mineral or stony ground in a natural drainage state
+        "terrain": 0.7,     # off the valley floor, on ground with some fall to it
     },
 )
 

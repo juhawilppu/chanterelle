@@ -8,11 +8,17 @@ attribute and still rank no better than chance.
 
     AUC   probability that a random real sighting outscores a random Karkkila
           stand. 0.5 = coin toss, 1.0 = perfect separation.
-    lift  share of sightings landing in the top 15% of stands (the "Korkea"
-          and "Erinomainen" end of the map), against the 15% chance would give.
+    lift  how much more likely a sighting is to be in the top slice of the
+          map than chance would give. The slice is defined by a score cutoff,
+          and scores TIE heavily -- the tables are discrete, so thousands of
+          stands share a score and a nominal "top 10%" cutoff can select 19%
+          of the map. Lift is therefore measured against the share actually
+          selected, never against the nominal 15%: comparing a tie-heavy
+          model to a tie-free one on the nominal figure flatters the tie-heavy
+          one badly enough to reverse the conclusion.
 
-Only the four site factors are scored -- kasvupaikka, kehitysluokka, maapera,
-valoisuus. The species and sekametsa terms are left out because the sighting
+Only the site factors are scored -- kasvupaikka, kehitysluokka, maapera,
+valoisuus and maastonmuoto. The species and sekametsa terms are left out because the sighting
 rows carry the WFS's PROPORTIONSPRUCE/PINE/OTHER while the Karkkila background
 carries per-stratum basal areas, and scoring the two sides from different
 inputs would flatter or punish the model for the wrong reason.
@@ -46,6 +52,10 @@ WFS_COLUMNS = {
     "soiltype": "SOILTYPE",
     "drainagestate": "DRAINAGESTATE",
     "stemcount": "STEMCOUNT",
+    # terrain is read from the elevation model for both sides, so it is
+    # already named the same way on sighting rows as on stands
+    "tpi": "tpi_large",
+    "slope": "slope",
 }
 
 TOP_SHARE = 0.15  # "Korkea" and above
@@ -59,11 +69,11 @@ def site_score(df: pd.DataFrame, profile: SpeciesProfile, columns=None) -> pd.Se
     budget = profile.factor_points
     ratios = {
         factor: (points[factor] / budget[factor]).clip(upper=1)
-        for factor in ("fertility", "development", "soil", "light")
+        for factor in ("fertility", "development", "soil", "light", "terrain")
     }
     weakest = pd.concat(
         [(ratio / profile.green_thresholds[factor]).clip(upper=1)
-         for factor, ratio in ratios.items()],
+         for factor, ratio in ratios.items() if factor in sp.LIMITING_FACTORS],
         axis=1,
     ).min(axis=1).fillna(0)
     total = sum(points[factor] for factor in ratios)
@@ -92,7 +102,8 @@ def load_sightings(profile: SpeciesProfile) -> pd.DataFrame:
     df = pd.DataFrame(json.loads(path.read_text()))
     for wfs in ("FERTILITYCLASS", "SOILTYPE", "DRAINAGESTATE", "MAINGROUP", "SUBGROUP"):
         df[wfs] = to_code(df[wfs])
-    return df
+    terrain = calibrate.sighting_terrain(profile, df)
+    return pd.concat([df, terrain], axis=1)
 
 
 def background(profile: SpeciesProfile) -> tuple[pd.DataFrame, pd.Series]:
@@ -109,12 +120,16 @@ def evaluate(profile: SpeciesProfile, sightings: pd.DataFrame,
     positive = site_score(sightings, profile, WFS_COLUMNS)[~excluded].dropna().to_numpy()
     bg_scores = site_score(bg, profile)[~bg_excluded].dropna().to_numpy()
     cutoff = np.quantile(bg_scores, 1 - TOP_SHARE)
+    selected = (bg_scores >= cutoff).mean()   # >= TOP_SHARE whenever scores tie
+    caught = (positive >= cutoff).mean()
     return {
         "n": len(positive),
         "n_total": len(sightings),
         "excluded_share": excluded.mean(),
         "auc": auc(positive, bg_scores),
-        "top_share": (positive >= cutoff).mean(),
+        "selected": selected,
+        "caught": caught,
+        "lift": caught / selected,
     }
 
 
@@ -134,8 +149,8 @@ def main() -> None:
         print(f"  {r['n']} sightings scored (of {r['n_total']}; "
               f"{r['excluded_share']:.0%} sit on stands the model excludes outright)")
         print(f"  AUC:  {r['auc']:.3f}")
-        print(f"  in the top {TOP_SHARE:.0%} of stands: {r['top_share']:.0%} "
-              f"({r['top_share'] / TOP_SHARE:.1f}x chance)")
+        print(f"  top slice holds {r['selected']:.0%} of stands and catches "
+              f"{r['caught']:.0%} of sightings -> {r['lift']:.2f}x chance")
 
     if len(slugs) > 1:
         # Each species' sightings scored by BOTH models. If a profile is

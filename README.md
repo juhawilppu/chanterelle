@@ -38,26 +38,76 @@ location on the map too, refreshed every 30 seconds.
 ## The two species
 
 Each mushroom gets its own habitat model in `scripts/species.py`, and the
-map switcher swaps which one is being drawn. They disagree about most of
-the municipality: of the stands either model puts in its top two
-categories, fewer than half are on both lists.
+map switcher swaps which one is being drawn.
 
 Kantarelli wants dry, half-open, well-drained mineral soil near an esker.
 Suppilovahvero is usually described as its opposite — dank, shady spruce
-mire — and calibrating that description against 710 real sightings mostly
-refuted it. The sightings say old regeneration-ready spruce stands (4.4x
+mire — and calibrating that description against real sightings mostly
+refuted it. The sightings say old regeneration-ready spruce stands (4.6x
 over-represented), a canopy no denser than kantarelli's, coarse and even
 stony soil rather than fine damp soil, and a *drier* fertility range than
-expected. What did hold up: a much stronger spruce association, and real
-tolerance for paludified ground, so spruce mires (korpi) stay on the
-suppilovahvero map where the kantarelli model throws them out. Each
-profile's tables carry the calibration evidence in comments.
+expected. What did hold up: a much stronger spruce association (70% vs 62%
+spruce-dominant), and real tolerance for paludified ground, so spruce mires
+(korpi) stay on the suppilovahvero map where the kantarelli model throws
+them out.
+
+The honest summary is that **these two mushrooms are hard to tell apart from
+forest data**. Their sighting distributions match within a couple of
+percentage points on fertility class, development class, soil and stem
+density, and a model tuned for one scores the other's sightings about as
+well as its own. Where they genuinely differ is spruce dominance, tolerance
+of wet ground, slope — and, most usefully, *season*: suppilovahvero is 85%
+September–November and effectively absent before August, while kantarelli
+peaks in July and August. Each profile's tables carry the calibration
+evidence in comments, including the places where the data contradicted the
+field-guide description.
+
+## Does it work?
+
+`scripts/validate.py` scores real sighting locations with the map's own code
+and asks whether the score ranks them above random forest:
+
+| | AUC | top 15% of the map catches |
+|---|---|---|
+| Kantarelli | 0.753 | 48% of sightings — 3.2x chance |
+| Suppilovahvero | 0.767 | 47% of sightings — 3.2x chance |
+
+Both numbers are in-sample — the weights were tuned against these same
+sightings — so treat them as an upper bound and as a way to compare model
+versions, not as absolute accuracy.
+
+Two lessons are baked into that script. Sighting coordinates are capped at
+100 m accuracy, because stands are 1–3 ha and a kilometre-wide record
+describes the forest someone walked through rather than the one the mushroom
+grew in. And lift is measured against the share of stands a cutoff *actually*
+selects: the scoring tables are discrete, so thousands of stands share a
+score, and a nominal "top 10%" can select 19% of the map. Comparing a
+tie-heavy model against a tie-free one on the nominal figure reverses the
+conclusion — it made a genuine improvement look like a regression.
 
 It's a habitat-suitability heuristic. The factor weights are calibrated
 against real sightings from laji.fi (see `scripts/calibrate.py`),
 but it's still a model, not a guarantee — treat it as "worth checking."
+The sightings are also opportunistic: they partly describe where foragers
+walk, so the map inherits some of that bias.
 And a reminder: mushroom picking is covered by *jokamiehenoikeus*
 (everyman's right) everywhere shown, regardless of who owns the land.
+
+## Landform
+
+The forest inventory describes the stand but not where it sits, and two
+stands with identical rows can be a dry crest and the damp hollow below it.
+Adding landform from the elevation model was the largest single improvement
+either model has had: it roughly *doubles* how densely real sightings
+concentrate in the best-scoring tenth of the map.
+
+The finding itself is blunt, and it is the same for both species: ground
+sitting 3 m or more below its surroundings holds a quarter of Karkkila's
+forest but only an eighth of the sightings (0.5x). Depressions here are wet,
+and neither mushroom fruits in wet. This is the opposite of what
+suppilovahvero's "damp hollows and ditch banks" reputation predicts. Level
+to gently raised ground is the sweet spot; crests fall back slightly, being
+thin and dry.
 
 ## Data sources
 
@@ -66,6 +116,11 @@ And a reminder: mushroom picking is covered by *jokamiehenoikeus*
   class, site fertility, soil type, drainage state.
 - [GTK](https://www.gtk.fi/) (Geological Survey of Finland) — glaciofluvial
   and moraine formation polygons (eskers), via ArcGIS REST.
+- [Maanmittauslaitos](https://www.maanmittauslaitos.fi/) 10 m elevation
+  model (lidar-derived ground model), for landform: whether a stand sits in
+  a hollow, on a hillside or on a crest, and how steeply the ground falls.
+  Read by HTTP range request from the openly mirrored nationwide VRT at
+  funet, so only the window over Karkkila is ever fetched.
 - [laji.fi](https://laji.fi/) (Finnish Biodiversity Information Facility) —
   real sighting coordinates per species, used both to calibrate the scoring
   weights and, for sightings inside Karkkila, as the flags on the map.
@@ -99,6 +154,9 @@ To recalibrate a species' weights against real sightings, put a free
 run `python scripts/calibrate.py --species suppilovahvero`. It prints a
 presence-vs-background comparison per factor; use that to inform the weights
 in that species' profile in `scripts/species.py` by hand.
+
+To check whether a change to the weights actually helped, run
+`python scripts/validate.py`.
 
 To add a mushroom, write another `SpeciesProfile` in `scripts/species.py`
 and add it to `PROFILES` — the scoring engine, the map, the switcher and

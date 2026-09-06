@@ -27,6 +27,7 @@ import pandas as pd
 from shapely.geometry import mapping
 
 import species as sp
+import topography as topo
 from species import PROFILES, SpeciesProfile
 
 MUNICIPALITY = "Karkkila"
@@ -34,6 +35,8 @@ MUNICIPALITY = "Karkkila"
 ROOT = Path(__file__).resolve().parent.parent
 GPKG_PATH = ROOT / "data" / "raw" / f"MV_{MUNICIPALITY}" / f"MV_{MUNICIPALITY}.gpkg"
 GTK_FORMATIONS_PATH = ROOT / "data" / "cache" / f"gtk_formations_{MUNICIPALITY}.geojson"
+DEM_CACHE_PATH = topo.dem_cache_path(ROOT, MUNICIPALITY)
+TERRAIN_CACHE_PATH = ROOT / "data" / "cache" / f"terrain_stands_{MUNICIPALITY}.npz"
 OUTPUT_GEOJSON = ROOT / "output" / "scored_stands.geojson"
 OUTPUT_HTML = ROOT / "output" / "karkkila_sienikartta.html"
 
@@ -45,7 +48,7 @@ MAPPED_CATEGORIES = ["excellent", "high", "medium"]
 
 # Factors whose ratio is species-specific and therefore shipped per species,
 # in the order the browser expects them after [score, category].
-SCORED_FACTORS = ["fertility", "development", "species", "light", "soil"]
+SCORED_FACTORS = ["fertility", "development", "species", "light", "soil", "terrain"]
 
 # ~1 m at this latitude, against stand outlines already simplified to 2 m --
 # invisible on the map, and it takes a third off the size of the file
@@ -58,6 +61,7 @@ def laji_sightings_path(profile: SpeciesProfile) -> Path:
 
 def load_layers():
     stand = gpd.read_file(GPKG_PATH, layer="stand")[["standid", "area", "geometry"]]
+    stand = stand.join(compute_terrain(stand))
     growthplace = gpd.read_file(GPKG_PATH, layer="growthplacedata")[
         ["standid", "maingroup", "subgroup", "fertilityclass", "soiltype", "drainagestate"]
     ]
@@ -115,6 +119,8 @@ SITE_COLUMNS = {
     "soiltype": "soiltype",
     "drainagestate": "drainagestate",
     "stemcount": "stemcount",
+    "tpi": "tpi_large",
+    "slope": "slope",
 }
 
 
@@ -138,7 +144,20 @@ def site_factor_points(df: pd.DataFrame, profile: SpeciesProfile,
         np.interp(stemcount, profile.light.stemcount_knots, profile.light.suitability_knots),
         index=df.index,
     ).where(stemcount.notna())
+    # Landform: how the stand sits relative to its surroundings, and how
+    # steeply. Two responses combined by the profile's tpi_weight rather than
+    # scored separately, because they describe one thing between them -- where
+    # water goes -- and splitting them would give terrain two votes.
+    terrain = profile.terrain
+    tpi_fit = np.interp(df[c["tpi"]], terrain.tpi_knots, terrain.tpi_suitability)
+    slope_fit = np.interp(df[c["slope"]], terrain.slope_knots, terrain.slope_suitability)
+    landform = pd.Series(
+        terrain.tpi_weight * tpi_fit + (1 - terrain.tpi_weight) * slope_fit,
+        index=df.index,
+    ).where(df[c["tpi"]].notna() & df[c["slope"]].notna())
+
     return {
+        "terrain": points["terrain"] * landform.fillna(0.6),
         "fertility": df[c["fertilityclass"]].map(profile.fertility_points)
                        .fillna(profile.default_fertility_points),
         "development": df[c["developmentclass"]].map(profile.development_points)
@@ -177,6 +196,7 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum,
 
     site = site_factor_points(df, profile)
     fertility_score, development_score, soil_score = site["fertility"], site["development"], site["soil"]
+    terrain_score = site["terrain"]
     # the species contribution is split in two: host quality (how good the
     # dominant trees are as a mycorrhizal partner, per the profile's weights)
     # and a separate "sekametsä" mixture term. A stand can score well on one
@@ -191,6 +211,7 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum,
     df["mixture_ratio"] = df["diversity_index"].fillna(0).round(2)
     df["soil_ratio"] = (soil_score / points["soil"]).clip(upper=1).round(2)
     df["light_ratio"] = (light_score / points["light"]).round(2)
+    df["terrain_ratio"] = (terrain_score / points["terrain"]).round(2)
 
     # Limiting-factor penalty (Liebig's law of the minimum): habitat is
     # limited by its worst attribute, not its average. A plain sum lets a
@@ -200,20 +221,44 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum,
     # "Korkea" stands carrying a red factor. Each factor is measured against
     # its own green threshold, so "green everywhere" means no penalty at all.
     weakest = pd.concat(
-        [(df[f"{factor}_ratio"] / threshold).clip(upper=1)
-         for factor, threshold in profile.green_thresholds.items()],
+        [(df[f"{factor}_ratio"] / profile.green_thresholds[factor]).clip(upper=1)
+         for factor in sp.LIMITING_FACTORS],
         axis=1,
     ).min(axis=1).fillna(0)
 
     raw = (
         fertility_score + development_score + species_quality_score
-        + mixture_score + soil_score + light_score
+        + mixture_score + soil_score + light_score + terrain_score
     )
     df["score"] = (raw * (sp.LIMITING_FLOOR + (1 - sp.LIMITING_FLOOR) * weakest)).round(1)
     df.loc[excluded, "score"] = 0
     df["excluded"] = excluded
 
     return gpd.GeoDataFrame(df, geometry="geometry", crs=stand.crs)
+
+
+def compute_terrain(stand: gpd.GeoDataFrame) -> pd.DataFrame:
+    """Landform metrics per stand, from the national 10 m elevation model.
+
+    Purely geometric like the esker lookup, so it is computed once for every
+    stand and handed to whichever species profile wants it. Cached, because it
+    reads a few tens of megabytes of elevation over HTTP.
+    """
+    if TERRAIN_CACHE_PATH.exists():
+        cached = np.load(TERRAIN_CACHE_PATH)
+        return pd.DataFrame({name: cached[name] for name in topo.METRICS}, index=stand.index)
+
+    print("Computing terrain metrics from the 10 m elevation model ...")
+    dem, transform = topo.read_dem(tuple(stand.total_bounds), cache_path=DEM_CACHE_PATH)
+    # sampled at the centroid, not averaged over the polygon: the sightings
+    # this is calibrated against are single points, and a polygon average is
+    # not the same quantity (see the note in topography.py)
+    centroids = stand.geometry.centroid
+    values = topo.sample_points(topo.terrain_metrics(dem), transform,
+                                centroids.x.to_numpy(), centroids.y.to_numpy())
+    TERRAIN_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(TERRAIN_CACHE_PATH, **values)
+    return pd.DataFrame(values, index=stand.index)
 
 
 def compute_near_esker(stand: gpd.GeoDataFrame) -> pd.Series:
@@ -371,6 +416,8 @@ def to_geojson_dict(frames: dict[str, gpd.GeoDataFrame]) -> dict:
             "div": number(row["mixture_ratio"], 2),
             "stem": None if pd.isna(row["stemcount"]) else int(row["stemcount"]),
             "esk": int(bool(row["near_esker"])),
+            "tpi": number(row["tpi_large"], 1),
+            "slp": number(row["slope"], 1),
         }
         for slug, block in blocks.items():
             if block[i] is not None:
@@ -421,6 +468,7 @@ def species_config() -> list[dict]:
                 "sparseStems": profile.light.sparse_stems,
                 "sparse": profile.light.label_sparse,
             },
+            "terrain": {"row": profile.terrain.row_label},
             "esker": list(profile.esker_row_labels) if profile.uses_esker else None,
             "sightings": load_sightings_geojson(profile),
         }
@@ -437,6 +485,9 @@ def label_config() -> dict:
         "species": sp.TREESPECIES_LABELS,
         "mixtureBands": sp.MIXTURE_BANDS,
         "mixtureFallback": sp.MIXTURE_FALLBACK,
+        "landformBands": sp.LANDFORM_BANDS,
+        "landformFallback": sp.LANDFORM_FALLBACK,
+        "slopeBands": sp.SLOPE_BANDS,
     }
 
 
@@ -578,7 +629,7 @@ const STORAGE_KEY = "karkkila-sienikartta-species";
 // Each species' scores ride along as a compact array under its own key:
 // [score, category index, then one ratio per scored factor].
 const SCORE = 0, CATEGORY = 1;
-const RATIO = { fertility: 2, development: 3, species: 4, light: 5, soil: 6 };
+const RATIO = { fertility: 2, development: 3, species: 4, light: 5, soil: 6, terrain: 7 };
 const CATEGORIES = __CATEGORIES__;
 
 // An ordered ramp rather than three unrelated hues: the colour cools and
@@ -619,6 +670,17 @@ function mixtureLabel(diversity) {
     if (diversity >= threshold) return label;
   }
   return LABELS.mixtureFallback;
+}
+
+// Where the stand sits in the landscape, from the elevation model: how high
+// it stands relative to the ground within 500 m, and how steeply it falls.
+// The slope half is only spelled out when there is a slope worth mentioning.
+function landformLabel(tpi, slope) {
+  if (tpi == null) return "?";
+  const band = LABELS.landformBands.find(([threshold]) => tpi >= threshold);
+  const landform = band ? band[1] : LABELS.landformFallback;
+  const steep = slope == null ? null : LABELS.slopeBands.find(([threshold]) => slope >= threshold);
+  return steep ? `${landform}, ${steep[1]}` : landform;
 }
 
 // A low light/shade ratio means one of two opposite things -- too few trees or
@@ -662,6 +724,7 @@ function popupHtml(p, cfg) {
     popupRow("Sekametsäisyys", mixtureLabel(p.div), p.div, cfg.green.mixture),
     popupRow(cfg.light.row, lightLabel(cfg, v[RATIO.light], p.stem), v[RATIO.light], cfg.green.light),
     popupRow("Maaperä", soil, v[RATIO.soil], cfg.green.soil),
+    popupRow(cfg.terrain.row, landformLabel(p.tpi, p.slp), v[RATIO.terrain], cfg.green.terrain),
   ];
   // binary factor, and only for the species whose model uses it: green when
   // near an esker, red when not

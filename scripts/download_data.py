@@ -6,6 +6,9 @@ Sources:
 - GTK (Geological Survey of Finland) glaciofluvial / moraine formation
   polygons (eskers etc.), fetched by bounding box from their ArcGIS REST
   service, clipped to the extent of the forest stand data above.
+- Maanmittauslaitos 10 m elevation model, the window covering the
+  municipality, read by HTTP range request from the openly mirrored
+  nationwide VRT rather than downloaded as tiles.
 - laji.fi (FinBIF) real sighting coordinates for every mapped species
   within the municipality, for the "reported here" flags on the map.
   Optional: skipped if no LAJI_FI_TOKEN is set in .env.
@@ -23,6 +26,7 @@ import requests
 from pyproj import Transformer
 from shapely.geometry import Point
 
+import topography as topo
 from species import PROFILES, SpeciesProfile
 
 MUNICIPALITY = "Karkkila"
@@ -87,6 +91,23 @@ def download_gtk_formations(bounds_epsg3067: tuple[float, float, float, float]) 
     n = len(resp.json().get("features", []))
     print(f"Saved {n} formation polygons to {GTK_FORMATIONS_PATH}")
     return GTK_FORMATIONS_PATH
+
+
+def download_dem(stand_gdf: gpd.GeoDataFrame) -> Path:
+    """The elevation window for this municipality, cached as a numpy array.
+
+    Only the window is fetched: the source is a nationwide VRT and GDAL reads
+    it by range request, so this costs tens of megabytes rather than the
+    hundreds of gigabytes the full model would.
+    """
+    path = topo.dem_cache_path(ROOT, MUNICIPALITY)
+    if path.exists():
+        print(f"Using cached {path}")
+        return path
+    print(f"Reading the 10 m elevation model over {MUNICIPALITY} ...")
+    dem, _ = topo.read_dem(tuple(stand_gdf.total_bounds), cache_path=path)
+    print(f"Saved a {dem.shape[1]}x{dem.shape[0]} elevation grid to {path}")
+    return path
 
 
 def load_laji_token() -> str | None:
@@ -154,6 +175,7 @@ def main() -> None:
     gpkg_path = download_forest_stand_data()
     stand = gpd.read_file(gpkg_path, layer="stand")
     download_gtk_formations(tuple(stand.total_bounds))
+    download_dem(stand)
     for profile in PROFILES.values():
         download_laji_sightings(stand, profile)
 
