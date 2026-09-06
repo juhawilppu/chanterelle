@@ -38,7 +38,14 @@ ROOT = Path(__file__).resolve().parent.parent
 # same southern-Finland managed-forest zone Karkkila sits in, so comparing
 # sighting locations against Karkkila's own stand population is apples-to-apples
 BBOX_WGS84 = "60.0:61.3:22.5:26.0:WGS84"
-COORDINATE_ACCURACY_MAX_M = 1000
+# A sighting is only evidence about a stand if it can be placed IN that stand,
+# and stands here are 1-3 ha. The old 1000 m cap let a record 1 km wide be
+# matched to whichever stand happened to sit under its centre point, which
+# describes the forest someone walked through rather than the forest the
+# mushroom grew in. Tightening this costs less data than it sounds: most
+# records are already GPS-precise (at 100 m, 820 of 1063 kantarelli and 661 of
+# 904 suppilovahvero records survive).
+COORDINATE_ACCURACY_MAX_M = 100
 
 LAJI_API = "https://api.laji.fi/v0/warehouse/query/unit/list"
 MK_WFS = "https://avoin.metsakeskus.fi/rajapinnat/v1/stand/ows"
@@ -55,7 +62,10 @@ def load_token() -> str:
 
 
 def cache_path(profile: SpeciesProfile) -> Path:
-    return ROOT / "data" / "cache" / f"{profile.slug}_sightings_with_stands.json"
+    # the accuracy cap is part of the identity of the dataset, so tightening it
+    # builds a new cache rather than silently reusing the looser one
+    return (ROOT / "data" / "cache" /
+            f"{profile.slug}_sightings_with_stands_{COORDINATE_ACCURACY_MAX_M}m.json")
 
 
 def fetch_sightings(token: str, profile: SpeciesProfile) -> list[dict]:
@@ -75,7 +85,12 @@ def fetch_sightings(token: str, profile: SpeciesProfile) -> list[dict]:
         for r in data["results"]:
             pt = r.get("gathering", {}).get("conversions", {}).get("wgs84CenterPoint")
             if pt:
-                sightings.append({"lat": pt["lat"], "lon": pt["lon"], "date": r["gathering"].get("displayDateTime")})
+                sightings.append({
+                    "lat": pt["lat"], "lon": pt["lon"],
+                    "date": r["gathering"].get("displayDateTime"),
+                    # kept so a dataset can be re-filtered without refetching
+                    "accuracy_m": r["gathering"].get("interpretations", {}).get("coordinateAccuracy"),
+                })
         print(f"  page {page}/{data['lastPage']}: {len(data['results'])} records")
         if page >= data["lastPage"]:
             break

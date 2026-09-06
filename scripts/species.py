@@ -156,35 +156,40 @@ KANTARELLI = SpeciesProfile(
     intro="Kuivahko, valoisa kangasmetsä hyvin vettä läpäisevällä maaperällä.",
 
     fertility_points={
-        # Weights calibrated against real Cantharellus cibarius sightings from
-        # laji.fi (see scripts/calibrate.py): compared against Karkkila's own
-        # stand population, MT-fertility sightings landed almost exactly at
-        # prevalence (well calibrated already), VT was notably under-weighted
-        # here relative to how often real sightings land there, and OMT was
-        # somewhat over-weighted relative to its (high) prevalence.
+        # Recalibrated against sightings placed to within 100 m (see the note
+        # on COORDINATE_ACCURACY_MAX_M in calibrate.py -- the earlier 1 km cap
+        # matched a quarter of records to whichever stand sat under a very
+        # fuzzy centre point). On the clean set MT stays at prevalence (1.1x),
+        # VT is clearly favoured (1.5x) and OMT is avoided relative to how
+        # common it is (0.6x) -- so VT moves above OMT here, which is the
+        # opposite of the ordering fertility class alone would suggest.
         "1": 17,  # Lehto - lush but often too dense/herby
-        "2": 19,  # Lehtomainen kangas (OMT) - good, but not as dominant as raw prevalence suggests
-        "3": 25,  # Tuore kangas (MT) - prime, matches real sightings almost exactly
-        "4": 18,  # Kuivahko kangas (VT) - real sightings favor this more than expected
-        "5": 10,  # Kuiva kangas (CT)
-        "6": 3,   # Karukkokangas
+        "2": 16,  # Lehtomainen kangas (OMT) - real sightings avoid it (0.6x)
+        "3": 25,  # Tuore kangas (MT) - prime, and the bulk of all sightings
+        "4": 21,  # Kuivahko kangas (VT) - genuinely favoured (1.5x)
+        "5": 12,  # Kuiva kangas (CT) - enriched, but on ~2% of sightings
+        "6": 4,   # Karukkokangas
         "7": 0,   # Kalliomaa ja hietikko
         "8": 0,   # Lakimetsä ja tunturi
     },
     development_points={
-        # Calibrated against laji.fi sightings: the oldest, regeneration-ready
-        # stands (04) were 4x over-represented at real sighting locations
-        # relative to their prevalence -- the strongest single signal in the
-        # calibration -- while 03 (previously tied for best) was slightly
-        # under-represented. 04 is now the top category instead of 03.
-        "02": 10,  # Nuori kasvatusmetsikkö - real sightings avoid this
-        "03": 20,  # Varttunut kasvatusmetsikkö - good, but not the top anymore
-        "04": 25,  # Uudistuskypsä metsikkö - real sightings favor this most
-        "05": 15,  # Suojuspuumetsikkö
-        "ER": 18,  # Eri-ikäisrakenteinen
+        # The strongest signal in either species' calibration, and it got
+        # stronger on the precise-coordinate set: regeneration-ready stands
+        # (04) carry 47% of sightings against 10% of the available forest, a
+        # 4.5x enrichment, while 03 -- nearly two thirds of Karkkila -- sits
+        # at 0.7x and young stands at 0.2x. The gap between 03 and 04 was
+        # previously too narrow to separate them on the map; widening it is
+        # the single change that most improves how the score ranks real
+        # sightings, so 03 is scored for what it is: the default forest here,
+        # not a destination.
+        "02": 8,   # Nuori kasvatusmetsikkö - strongly avoided (0.2x)
+        "03": 17,  # Varttunut kasvatusmetsikkö - common, under-represented (0.7x)
+        "04": 25,  # Uudistuskypsä metsikkö - by far the best predictor (4.5x)
+        "05": 12,  # Suojuspuumetsikkö
+        "ER": 16,  # Eri-ikäisrakenteinen
         "S0": 5,   # Siemenpuumetsikkö - too open
         "Y1": 5,   # Ylispuustoinen taimikko
-        "T2": 2,   # Taimikko yli 1.3 m - too young
+        "T2": 3,   # Taimikko yli 1.3 m - too young
     },
     soil_points={  # coarse/well-drained mineral soils score best
         "10": 15, "11": 15, "12": 15, "30": 14, "31": 14, "32": 14,
@@ -231,8 +236,8 @@ KANTARELLI = SpeciesProfile(
         # crowded ones (dark) at the same age. Calibrated against real laji.fi
         # sightings: 74% fall in 300-800 stems/ha (vs 44% of background),
         # dropping off sharply above 800 and effectively absent below 300.
-        stemcount_knots=[0, 100, 400, 800, 2000],
-        suitability_knots=[0.25, 0.25, 1.0, 1.0, 0.0],
+        stemcount_knots=[0, 150, 350, 800, 1600, 2400],
+        suitability_knots=[0.15, 0.3, 1.0, 1.0, 0.3, 0.0],
         row_label="Valoisuus",
         label_good="Avoin, valoisa",
         label_mid="Melko tiheä",
@@ -359,8 +364,8 @@ SUPPILOVAHVERO = SpeciesProfile(
         # NOT want the dark dense thicket it is usually described as haunting;
         # it wants roughly the same half-open canopy kantarelli does, just
         # holding on somewhat better into denser forest.
-        stemcount_knots=[0, 150, 350, 900, 1600, 3000],
-        suitability_knots=[0.1, 0.25, 1.0, 1.0, 0.45, 0.2],
+        stemcount_knots=[0, 150, 350, 900, 1600, 2600],
+        suitability_knots=[0.1, 0.25, 1.0, 1.0, 0.3, 0.1],
         row_label="Valoisuus",
         label_good="Avoin, valoisa",
         label_mid="Melko tiheä",

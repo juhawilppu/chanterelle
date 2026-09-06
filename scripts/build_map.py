@@ -106,6 +106,63 @@ def compute_species_mix(treestand: pd.DataFrame, treestratum: pd.DataFrame,
     return mix.rename(columns={"treespecies": "dominant_species"}).reset_index()
 
 
+# Column names the site factors are read from. Given as a mapping so the same
+# scoring code can be pointed at the differently-named columns of the
+# Metsakeskus WFS rows that scripts/validate.py scores sightings from.
+SITE_COLUMNS = {
+    "fertilityclass": "fertilityclass",
+    "developmentclass": "developmentclass",
+    "soiltype": "soiltype",
+    "drainagestate": "drainagestate",
+    "stemcount": "stemcount",
+}
+
+
+def site_factor_points(df: pd.DataFrame, profile: SpeciesProfile,
+                       columns: dict[str, str] | None = None) -> dict[str, pd.Series]:
+    """Points for the four factors that come straight off a stand's own
+    inventory attributes, before the species/mixture terms are added.
+
+    Split out of score_stands so that validate.py can score real sighting
+    locations with exactly the code the map uses, rather than a lookalike that
+    could drift away from it.
+    """
+    c = columns or SITE_COLUMNS
+    points = profile.factor_points
+    # Canopy density, via the profile's own stems/ha response curve. It peaks
+    # in a band rather than rising monotonically in either direction: a nearly
+    # treeless stand has all the light in the world but no living mycorrhizal
+    # host, so it must never score as ideal.
+    stemcount = df[c["stemcount"]]
+    suitability = pd.Series(
+        np.interp(stemcount, profile.light.stemcount_knots, profile.light.suitability_knots),
+        index=df.index,
+    ).where(stemcount.notna())
+    return {
+        "fertility": df[c["fertilityclass"]].map(profile.fertility_points)
+                       .fillna(profile.default_fertility_points),
+        "development": df[c["developmentclass"]].map(profile.development_points)
+                       .fillna(profile.default_development_points),
+        "soil": (df[c["soiltype"]].map(profile.soil_points).fillna(profile.soil_default)
+                 * df[c["drainagestate"]].map(profile.drainage_multiplier).fillna(profile.drainage_default)),
+        "light": points["light"] * suitability.fillna(0.4),
+    }
+
+
+def is_excluded(df: pd.DataFrame, profile: SpeciesProfile,
+                columns: dict[str, str] | None = None,
+                maingroup: str = "maingroup", subgroup: str = "subgroup") -> pd.Series:
+    """Stands this species' model writes off outright: wrong land class, the
+    wrong kind of mire, no forest floor yet, or bare rock."""
+    c = columns or SITE_COLUMNS
+    return (
+        (df[maingroup] != "1")
+        | df[subgroup].isin(profile.excluded_subgroup)
+        | df[c["developmentclass"]].isin(sp.EXCLUDED_DEVELOPMENT)
+        | df[c["fertilityclass"]].isin(profile.excluded_fertility)
+    )
+
+
 def score_stands(stand, growthplace, treestand, treestandsummary, treestratum,
                  profile: SpeciesProfile) -> gpd.GeoDataFrame:
     species_mix = compute_species_mix(treestand, treestratum, profile)
@@ -116,34 +173,17 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum,
     df = df.merge(treestandsummary, on="treestandid", how="left")
     df = df.merge(species_mix, on="treestandid", how="left")
 
-    excluded = (
-        (df["maingroup"] != "1")
-        | df["subgroup"].isin(profile.excluded_subgroup)
-        | df["developmentclass"].isin(sp.EXCLUDED_DEVELOPMENT)
-        | df["fertilityclass"].isin(profile.excluded_fertility)
-    )
+    excluded = is_excluded(df, profile)
 
-    fertility_score = df["fertilityclass"].map(profile.fertility_points).fillna(profile.default_fertility_points)
-    development_score = df["developmentclass"].map(profile.development_points).fillna(profile.default_development_points)
-    soil_score = (
-        df["soiltype"].map(profile.soil_points).fillna(profile.soil_default)
-        * df["drainagestate"].map(profile.drainage_multiplier).fillna(profile.drainage_default)
-    )
+    site = site_factor_points(df, profile)
+    fertility_score, development_score, soil_score = site["fertility"], site["development"], site["soil"]
     # the species contribution is split in two: host quality (how good the
     # dominant trees are as a mycorrhizal partner, per the profile's weights)
     # and a separate "sekametsä" mixture term. A stand can score well on one
     # without the other, and the two species weigh them very differently.
     species_quality_score = points["species"] * df["species_fraction"].fillna(0.3)
     mixture_score = points["mixture"] * df["diversity_index"].fillna(0)
-    # Canopy density, via the profile's own stems/ha response curve. It peaks
-    # in a band rather than rising monotonically in either direction: a nearly
-    # treeless stand has all the light in the world but no living mycorrhizal
-    # host, so it must never score as ideal.
-    suitability = pd.Series(
-        np.interp(df["stemcount"], profile.light.stemcount_knots, profile.light.suitability_knots),
-        index=df.index,
-    ).where(df["stemcount"].notna())
-    light_score = points["light"] * suitability.fillna(0.4)
+    light_score = site["light"]
 
     df["fertility_ratio"] = (fertility_score / points["fertility"]).clip(upper=1).round(2)
     df["development_ratio"] = (development_score / points["development"]).clip(upper=1).round(2)
