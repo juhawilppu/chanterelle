@@ -561,6 +561,13 @@ const CATEGORY_LABELS = { excellent: "Erinomainen", high: "Korkea", medium: "Koh
 // basemap underneath is busy
 const FILL_OPACITY = { excellent: 0.72, high: 0.58, medium: 0.45 };
 
+// Everything mapped here is inside one municipality, so this is the area the
+// map is ever useful in. Built from the stand centroids rather than from a
+// layer, so it covers both species regardless of which one is showing.
+const DATA_BOUNDS = L.latLngBounds(
+  STANDS.features.map((f) => [f.properties.lat, f.properties.lon])
+).pad(0.02);
+
 const map = L.map('map', { preferCanvas: true, zoomControl: false });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors',
@@ -774,7 +781,13 @@ function updateLocation() {
         locationMarker.setLatLng(latlng);
         accuracyCircle.setLatLng(latlng).setRadius(pos.coords.accuracy);
       }
-      if (firstFix) {
+      // Only follow the fix once it is actually inside the mapped area. A
+      // fix from home, from another town, or a bad first read would otherwise
+      // drag the view onto empty basemap with no stands on it at all -- there
+      // is no data outside Karkkila, so there is nothing to look at there.
+      // Karkkila stays framed until then, and the first fix that does land
+      // inside the map still centres on it, so driving in works as before.
+      if (firstFix && DATA_BOUNDS.contains(latlng)) {
         map.setView(latlng, 15);
         firstFix = false;
       }
