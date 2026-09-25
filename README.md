@@ -1,18 +1,21 @@
-# Karkkila mushroom map
+# Chanterelle
 
-A map of Karkkila, Finland that highlights the forest areas most likely
-to grow chanterelles (*Cantharellus cibarius*, kantarelli) and funnel
-chanterelles (*Craterellus tubaeformis*, suppilovahvero) — built from
-real forest inventory data, not guesswork, and usable straight from your
-phone in the woods. One map per mushroom, switched with the buttons at
-the top.
+A mushroom map of Karkkila, Finland, showing which patches of forest are
+most likely to grow chanterelles (*Cantharellus cibarius*) and funnel
+chanterelles (*Craterellus tubaeformis*). It's built from Finland's open
+forest inventory data rather than guesswork, and it's made to be used on
+your phone, in the woods. Each mushroom has its own map, and the buttons at
+the top switch between them.
 
-Karkkila is my home town. I've spent years walking those forests looking
-for kantarelli and have never once come home with enough to actually
-cook, so this is my fix for that. It's also why the map only covers this
-one municipality instead of all of Finland. It works: the kantarelli map
-found mushrooms on its first outing, which is what earned suppilovahvero
-a map of its own.
+Karkkila is my home town. I've spent years walking its forests looking for
+chanterelles and have never once come home with enough to actually cook, so
+this is my fix for that. It's also why the map covers this one town and not
+all of Finland. And it seems to help: the chanterelle map found mushrooms on
+its very first outing, which is how the funnel chanterelle earned a map of
+its own.
+
+In Finnish they're *kantarelli* and *suppilovahvero*, names you'll still see
+in the code and in the map's web address.
 
 **Live map: [kantarelli.juhawilppu.com](https://kantarelli.juhawilppu.com)**
 
@@ -20,111 +23,134 @@ a map of its own.
 
 ## What it does
 
-Chanterelles are picky about where they grow: mostly under spruce, in
-moss-floored forest that's mid-aged to mature and not too dark or too
-wet, on well-drained soil, often near eskers. Those aren't vibes —
-they're attributes that Finland's forest inventories actually record per
-stand.
+Chanterelles are picky about where they grow. They favour mature spruce or
+pine forest that isn't too dark or too wet, on well-drained soil, often near
+an esker (a ridge of sand and gravel left behind by the last ice age). None
+of that is guesswork: Finland's forest inventory records nearly all of it,
+stand by stand, and the Geological Survey of Finland maps the eskers.
 
-This project pulls that data for every one of Karkkila's ~13,000 forest
-stands, scores each one against those habitat correlates, ranks them
-against each other (since most of Karkkila is decent spruce forest, a
-fixed score cutoff would flag nearly everything as "good" — relative
-ranking is what actually points you somewhere useful), and renders the
-result as an interactive map. Click any stand for its score and the
-forestry data behind it. Open it on your phone and it'll track your live
-location on the map too, refreshed every 30 seconds.
+This project takes that data for each of Karkkila's roughly 13,000 forest
+stands and scores every stand against those habitat preferences. The stands
+are then ranked against each other instead of against a fixed cutoff. Most of
+Karkkila is perfectly decent spruce forest, so a fixed cutoff would call
+nearly all of it "good", and that doesn't tell you where to go.
+
+On the map, a stand is:
+
+- **Excellent** if every factor it's scored on looks right for the mushroom,
+  with no exceptions
+- **High** if it ranks in the top 15% of the rest
+- **Moderate** if it ranks in the next 35%
+
+The bottom half isn't drawn at all.
+
+Tap any stand to see its score and the forest data behind it. A green,
+yellow or red dot on each row shows which factors helped and which held it
+back. On a phone the map also shows where you are, updated every 30 seconds,
+and each popup has a button for directions there in Google Maps.
 
 ## The two species
 
-Each mushroom gets its own habitat model in `scripts/species.py`, and the
-map switcher swaps which one is being drawn.
+Each mushroom has its own habitat model in `scripts/species.py`.
 
-Kantarelli wants dry, half-open, well-drained mineral soil near an esker.
-Suppilovahvero is usually described as its opposite — dank, shady spruce
-mire — and calibrating that description against real sightings mostly
-refuted it. The sightings say old regeneration-ready spruce stands (4.6x
-over-represented), a canopy no denser than kantarelli's, coarse and even
-stony soil rather than fine damp soil, and a *drier* fertility range than
-expected. What did hold up: a much stronger spruce association (70% vs 62%
-spruce-dominant), and real tolerance for paludified ground, so spruce mires
-(korpi) stay on the suppilovahvero map where the kantarelli model throws
-them out.
+The chanterelle wants fairly dry, half-open forest on well-drained mineral
+soil, ideally near an esker. The funnel chanterelle is usually described as
+its opposite, a creature of dank, shady spruce mire, but checking that
+description against real sightings mostly disproved it. The sightings point
+to mature stands ready for felling (4.6x over-represented), a canopy no
+denser than the chanterelle's, coarse and even stony soil rather than fine,
+damp soil, and *drier* forest types than expected. What held up was a
+stronger preference for spruce (70% of sightings are in spruce-dominated
+stands, against 62% for the chanterelle) and a real tolerance for boggy
+ground. The funnel chanterelle map keeps spruce mires, which the chanterelle
+model rules out.
 
-The honest summary is that **these two mushrooms are hard to tell apart from
-forest data**. Their sighting distributions match within a couple of
-percentage points on fertility class, development class, soil and stem
-density, and a model tuned for one scores the other's sightings about as
-well as its own. Where they genuinely differ is spruce dominance, tolerance
-of wet ground, slope — and, most usefully, *season*: suppilovahvero is 85%
-September–November and effectively absent before August, while kantarelli
-peaks in July and August. Each profile's tables carry the calibration
-evidence in comments, including the places where the data contradicted the
-field-guide description.
+The honest summary is that **these two mushrooms are hard to tell apart using
+forest data**. Their sightings land in the same kinds of forest to within a
+few percentage points on forest type, stand age, soil and tree density, and
+a model tuned for one scores the other's sightings about as well as its own.
+Where they really differ is in how much they like spruce, how well they cope
+with wet ground, how they feel about slopes and, most usefully, *season*:
+85% of funnel chanterelle sightings are from September to November and
+almost none are from before August, while chanterelles peak in July and
+August. If you're out in October, you're probably looking for funnel
+chanterelles.
+
+The comments next to each species' scoring tables record the evidence behind
+every weight, including the places where the data contradicted the field
+guides.
+
+## Landform
+
+The forest inventory describes a stand, but not where it sits. Two stands
+with identical records can be a dry hilltop and the damp hollow below it. So
+every stand is also scored on its landform, read from the national 10 m
+elevation model: how high it sits relative to the ground around it, and how
+steep it is. That was the biggest single improvement either model has had.
+For both species, it lifted how densely sightings concentrate in the
+best-scoring tenth of the map from about 2.5x what chance would give to about
+4x.
+
+The finding is blunt, and it's the same for both mushrooms: ground sitting
+3 m or more below its surroundings makes up nearly a third of Karkkila's
+forest but holds only about a fifth of the sightings (0.6x). Hollows here are
+wet, and neither mushroom likes wet ground, which is the opposite of what the
+funnel chanterelle's "damp hollows and ditch banks" reputation predicts.
+Level or gently raised ground is the sweet spot. Hilltops do slightly worse,
+their soil being thin and dry.
 
 ## Does it work?
 
 `scripts/validate.py` scores real sighting locations with the map's own code
-and asks whether the score ranks them above random forest:
+and checks whether they come out ahead of randomly picked forest:
 
 | | AUC | top 15% of the map catches |
 |---|---|---|
-| Kantarelli | 0.753 | 48% of sightings — 3.2x chance |
-| Suppilovahvero | 0.767 | 47% of sightings — 3.2x chance |
+| Chanterelle | 0.753 | 48% of sightings — 3.2x chance |
+| Funnel chanterelle | 0.767 | 47% of sightings — 3.2x chance |
 
-Both numbers are in-sample — the weights were tuned against these same
-sightings — so treat them as an upper bound and as a way to compare model
-versions, not as absolute accuracy.
+AUC is the chance that a random sighting outscores a random patch of forest:
+0.5 is a coin flip and 1.0 would be perfect. Both numbers are in-sample, since
+the weights were tuned on these same sightings, so treat them as an upper
+bound and as a way to compare versions of the model, not as its true
+accuracy.
 
-Two lessons are baked into that script. Sighting coordinates are capped at
-100 m accuracy, because stands are 1–3 ha and a kilometre-wide record
-describes the forest someone walked through rather than the one the mushroom
-grew in. And lift is measured against the share of stands a cutoff *actually*
-selects: the scoring tables are discrete, so thousands of stands share a
-score, and a nominal "top 10%" can select 19% of the map. Comparing a
-tie-heavy model against a tie-free one on the nominal figure reverses the
-conclusion — it made a genuine improvement look like a regression.
+Two lessons are built into that script. Sighting coordinates are capped at
+100 m accuracy: stands are only 1–3 ha, and a record that's only accurate to
+a kilometre describes the forest someone walked through, not the one the
+mushroom grew in. And lift is measured against the share of stands a cutoff
+*actually* selects. Scores come from discrete tables, so thousands of stands
+tie, and a nominal "top 10%" can select 19% of the map. Comparing models on
+the nominal figure once made a genuine improvement look like a step
+backwards.
 
-It's a habitat-suitability heuristic. The factor weights are calibrated
-against real sightings from laji.fi (see `scripts/calibrate.py`),
-but it's still a model, not a guarantee — treat it as "worth checking."
-The sightings are also opportunistic: they partly describe where foragers
-walk, so the map inherits some of that bias.
-And a reminder: mushroom picking is covered by *jokamiehenoikeus*
-(everyman's right) everywhere shown, regardless of who owns the land.
+This is a habitat model, not a mushroom detector. The weights are calibrated
+against real sightings from laji.fi, but the map can only tell you where the
+forest looks right, so treat it as "worth a look" rather than a promise. The
+sightings are also opportunistic: they partly record where foragers happen
+to walk, and the map inherits some of that bias.
 
-## Landform
-
-The forest inventory describes the stand but not where it sits, and two
-stands with identical rows can be a dry crest and the damp hollow below it.
-Adding landform from the elevation model was the largest single improvement
-either model has had: it roughly *doubles* how densely real sightings
-concentrate in the best-scoring tenth of the map.
-
-The finding itself is blunt, and it is the same for both species: ground
-sitting 3 m or more below its surroundings holds a quarter of Karkkila's
-forest but only an eighth of the sightings (0.5x). Depressions here are wet,
-and neither mushroom fruits in wet. This is the opposite of what
-suppilovahvero's "damp hollows and ditch banks" reputation predicts. Level
-to gently raised ground is the sweet spot; crests fall back slightly, being
-thin and dry.
+And a reminder: in Finland, *jokamiehenoikeus* (everyman's right) lets anyone
+pick mushrooms in almost any forest, whoever owns it. Just stay out of
+people's yards, and check the rules if you're in a nature reserve.
 
 ## Data sources
 
-- [Suomen metsäkeskus](https://www.metsakeskus.fi/fi/avoin-metsa-ja-luontotieto) —
-  open forest resource data (metsävarakuviot): species, age, development
-  class, site fertility, soil type, drainage state.
-- [GTK](https://www.gtk.fi/) (Geological Survey of Finland) — glaciofluvial
-  and moraine formation polygons (eskers), via ArcGIS REST.
-- [Maanmittauslaitos](https://www.maanmittauslaitos.fi/) 10 m elevation
-  model (lidar-derived ground model), for landform: whether a stand sits in
-  a hollow, on a hillside or on a crest, and how steeply the ground falls.
-  Read by HTTP range request from the openly mirrored nationwide VRT at
-  funet, so only the window over Karkkila is ever fetched.
-- [laji.fi](https://laji.fi/) (Finnish Biodiversity Information Facility) —
-  real sighting coordinates per species, used both to calibrate the scoring
-  weights and, for sightings inside Karkkila, as the flags on the map.
-  Requires a free API token; see `scripts/calibrate.py`.
+- [Suomen metsäkeskus](https://www.metsakeskus.fi/fi/avoin-metsa-ja-luontotieto)
+  (Finnish Forest Centre): open forest inventory data per stand, including
+  tree species, development class, stem density, site type, soil and
+  drainage.
+- [GTK](https://www.gtk.fi/) (Geological Survey of Finland): glacial landform
+  polygons, used to find eskers, via ArcGIS REST.
+- [Maanmittauslaitos](https://www.maanmittauslaitos.fi/) (National Land
+  Survey of Finland): the 10 m lidar-derived elevation model, used for
+  landform. It's read with HTTP range requests from the openly mirrored
+  nationwide file at funet, so only the part covering Karkkila is ever
+  downloaded.
+- [laji.fi](https://laji.fi/) (Finnish Biodiversity Information Facility):
+  real sighting coordinates per species. They're used to calibrate the
+  scoring weights and, for sightings inside Karkkila, as the flags on the
+  map. Requires a free API token; see `scripts/calibrate.py`.
 
 ## Setup
 
@@ -144,23 +170,26 @@ python scripts/download_data.py   # downloads + caches source data under data/
 python scripts/build_map.py       # scores stands for every species, writes output/
 ```
 
-Open `output/karkkila_sienikartta.html` directly in a browser. Both species
-live in that one file: stand geometry is written once and shared, and the
-attribute labels are expanded in the browser from inventory codes, so the
-two-species map is smaller than the single-species one it replaced.
+Then open `output/karkkila_mushroom_map.html` in a browser. Both species
+live in that one file. Stand shapes are stored once and shared, and the
+labels are filled in by the browser from inventory codes, which keeps the
+file under 6 MB: small enough to load over mobile data in the middle of a
+forest.
 
-To recalibrate a species' weights against real sightings, put a free
+To recalibrate a species against real sightings, put a free
 [laji.fi](https://laji.fi/) API token in `.env` as `LAJI_FI_TOKEN=...`, then
-run `python scripts/calibrate.py --species suppilovahvero`. It prints a
-presence-vs-background comparison per factor; use that to inform the weights
-in that species' profile in `scripts/species.py` by hand.
+run `python scripts/calibrate.py --species suppilovahvero`. It prints how
+often each category turns up at sightings compared with Karkkila's forest as
+a whole. Use that to adjust the weights in that species' profile in
+`scripts/species.py` by hand. (The code knows the species by their Finnish
+names, `kantarelli` and `suppilovahvero`.)
 
 To check whether a change to the weights actually helped, run
 `python scripts/validate.py`.
 
 To add a mushroom, write another `SpeciesProfile` in `scripts/species.py`
-and add it to `PROFILES` — the scoring engine, the map, the switcher and
-the sighting downloads all pick it up from there.
+and add it to `PROFILES`. The scoring, the map, the switcher and the
+sighting downloads all pick it up from there.
 
-To target a different municipality, change `MUNICIPALITY` at the top of
-both scripts and rerun.
+To map a different municipality, change `MUNICIPALITY` at the top of
+`scripts/download_data.py` and `scripts/build_map.py`, then rerun both.
