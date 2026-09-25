@@ -15,9 +15,9 @@ its very first outing, which is how the funnel chanterelle earned a map of
 its own.
 
 In Finnish they're *kantarelli* and *suppilovahvero*, names you'll still see
-in the code and in the map's web address.
+in the code.
 
-**Live map: [kantarelli.juhawilppu.com](https://kantarelli.juhawilppu.com)**
+**Live map: [chanterelle.juhawilppu.com](https://chanterelle.juhawilppu.com)**
 
 ![Screenshot of the Karkkila mushroom map: a Chanterelle / Funnel chanterelle switcher above forest stands shaded by probability, with an open popup breaking one stand's score down factor by factor — a green, yellow or red dot per factor showing which ones earned the score and which held it back](docs/screenshot.jpg)
 
