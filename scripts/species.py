@@ -19,46 +19,49 @@ from dataclasses import dataclass, field
 
 # --- shared code tables (metsätietostandardi), species-independent ---------
 
+# UI labels are English. The Finnish forest site types keep their standard
+# abbreviations (OMT, MT, ...), which is what Finnish sources call them too.
 FERTILITY_LABELS = {
-    "1": "Lehto", "2": "Lehtomainen kangas (OMT)", "3": "Tuore kangas (MT)",
-    "4": "Kuivahko kangas (VT)", "5": "Kuiva kangas (CT)", "6": "Karukkokangas",
-    "7": "Kalliomaa ja hietikko", "8": "Lakimetsä ja tunturi",
+    "1": "Herb-rich forest", "2": "Herb-rich heath forest (OMT)", "3": "Mesic heath forest (MT)",
+    "4": "Sub-xeric heath forest (VT)", "5": "Xeric heath forest (CT)", "6": "Barren heath forest",
+    "7": "Rocky or sandy ground", "8": "Hilltop or fell forest",
 }
 
 DEVELOPMENT_LABELS = {
-    "02": "Nuori kasvatusmetsikkö", "03": "Varttunut kasvatusmetsikkö",
-    "04": "Uudistuskypsä metsikkö", "05": "Suojuspuumetsikkö",
-    "ER": "Eri-ikäisrakenteinen", "S0": "Siemenpuumetsikkö",
-    "Y1": "Ylispuustoinen taimikko", "T2": "Taimikko",
+    "02": "Young thinning stand", "03": "Advanced thinning stand",
+    "04": "Mature, regeneration-ready stand", "05": "Shelterwood stand",
+    "ER": "Uneven-aged stand", "S0": "Seed-tree stand",
+    "Y1": "Sapling stand with overstorey", "T2": "Sapling stand",
 }
 
 SOIL_LABELS = {
-    "10": "Karkea kangasmaa", "11": "Karkea moreeni", "12": "Karkea lajittunut maalaji",
-    "20": "Hienojakoinen kangasmaa", "21": "Hienoainesmoreeni", "22": "Hienojakoinen lajittunut maalaji",
-    "23": "Silttipitoinen maalaji", "24": "Savimaa",
-    "30": "Kivinen karkea kangasmaa", "31": "Kivinen karkea moreeni",
-    "32": "Kivinen karkea lajittunut maalaji", "40": "Kivinen hienojakoinen kangasmaa",
-    "50": "Kallio/kivikko", "60": "Turvemaa", "61": "Saraturve", "62": "Rahkaturve",
-    "70": "Multamaa", "80": "Liejumaa",
+    "10": "Coarse mineral soil", "11": "Coarse till", "12": "Coarse sorted soil",
+    "20": "Fine mineral soil", "21": "Fine till", "22": "Fine sorted soil",
+    "23": "Silty soil", "24": "Clay",
+    "30": "Stony coarse mineral soil", "31": "Stony coarse till",
+    "32": "Stony coarse sorted soil", "40": "Stony fine mineral soil",
+    "50": "Bedrock or boulders", "60": "Peat", "61": "Sedge peat", "62": "Sphagnum peat",
+    "70": "Humus soil", "80": "Mud soil",
 }
 
-# Shown in brackets after the soil type ("Karkea kangasmaa (ojittamaton)"),
-# so the "kangas"/"suo" half of each official name is left off as redundant.
+# Shown in brackets after the soil type ("Coarse mineral soil (undrained)"),
+# so the "heath" half of each official name is left off as redundant.
 DRAINAGE_LABELS = {
-    "1": "ojittamaton", "2": "soistunut", "3": "ojitettu",
-    "6": "ojittamaton suo", "7": "ojikko", "8": "muuttuma", "9": "turvekangas",
+    "1": "undrained", "2": "turning boggy", "3": "ditched",
+    "6": "undrained mire", "7": "freshly ditched mire", "8": "drained mire, changing",
+    "9": "drained peatland forest",
 }
 
 TREESPECIES_LABELS = {
-    "1": "Mänty", "2": "Kuusi", "3": "Rauduskoivu", "4": "Hieskoivu",
-    "5": "Haapa", "6": "Harmaaleppä", "7": "Tervaleppä",
-    "29": "Lehtipuu", "30": "Havupuu",
+    "1": "Scots pine", "2": "Norway spruce", "3": "Silver birch", "4": "Downy birch",
+    "5": "Aspen", "6": "Grey alder", "7": "Black alder",
+    "29": "Broadleaf (unspecified)", "30": "Conifer (unspecified)",
 }
 
 # Gini-Simpson bands. A description of the stand itself, not of how good that
 # stand is for a given mushroom, so both species share it.
-MIXTURE_BANDS = [(0.55, "Vahva sekametsä"), (0.3, "Jonkin verran sekapuustoa")]
-MIXTURE_FALLBACK = "Lähes yksipuulajinen"
+MIXTURE_BANDS = [(0.55, "Well-mixed forest"), (0.3, "Somewhat mixed")]
+MIXTURE_FALLBACK = "Nearly a single species"
 
 EXCLUDED_DEVELOPMENT = {"A0", "T1"}  # Aukea, Taimikko alle 1.3 m -- no forest floor yet
 MID_THRESHOLD = 0.3  # ratio below which a factor's badge turns red, for every species
@@ -127,25 +130,25 @@ class TerrainProfile:
 # the surrounding terrain. Shared by both species: it says what the ground is,
 # not whether the mushroom likes it.
 LANDFORM_BANDS = [
-    (8, "Laki tai selänne"),
-    (3, "Ylärinne"),
-    (1, "Loiva kohouma"),
-    (-1, "Ympäristönsä tasossa"),
-    (-3, "Loiva painauma"),
-    (-8, "Painanne"),
+    (8, "Hilltop or ridge"),
+    (3, "Upper slope"),
+    (1, "Gentle rise"),
+    (-1, "Level with its surroundings"),
+    (-3, "Shallow dip"),
+    (-8, "Hollow"),
 ]
-LANDFORM_FALLBACK = "Syvä notko"
+LANDFORM_FALLBACK = "Deep hollow"
 # Appended to the landform when the ground actually falls somewhere, from slope
 # in degrees. Below the last threshold the landform wording says enough on its
 # own and a redundant "flat" only makes the row longer.
-SLOPE_BANDS = [(11, "jyrkkä"), (7, "viettävä"), (4, "loivasti viettävä")]
+SLOPE_BANDS = [(11, "steep"), (7, "sloping"), (4, "gently sloping")]
 
 
 @dataclass(frozen=True)
 class SpeciesProfile:
     slug: str
     map_key: str         # short property key this species' scores ship under
-    name: str            # Finnish name, as shown in the UI
+    name: str            # English name, as shown in the UI
     latin: str
     laji_target: str     # laji.fi search target (scientific name)
     intro: str           # one-line habitat summary for the legend
@@ -200,10 +203,10 @@ class SpeciesProfile:
 KANTARELLI = SpeciesProfile(
     slug="kantarelli",
     map_key="k",
-    name="Kantarelli",
+    name="Chanterelle",
     latin="Cantharellus cibarius",
     laji_target="Cantharellus cibarius",
-    intro="Kuivahko, valoisa kangasmetsä hyvin vettä läpäisevällä maaperällä.",
+    intro="Fairly dry, well-lit heath forest on free-draining soil.",
 
     fertility_points={
         # Recalibrated against sightings placed to within 100 m (see the note
@@ -288,12 +291,12 @@ KANTARELLI = SpeciesProfile(
         # dropping off sharply above 800 and effectively absent below 300.
         stemcount_knots=[0, 150, 350, 800, 1600, 2400],
         suitability_knots=[0.15, 0.3, 1.0, 1.0, 0.3, 0.0],
-        row_label="Valoisuus",
-        label_good="Avoin, valoisa",
-        label_mid="Melko tiheä",
-        label_poor="Tiheä, vähän valoa",
+        row_label="Light",
+        label_good="Open, well-lit",
+        label_mid="Fairly dense",
+        label_poor="Dense, little light",
         sparse_stems=400,
-        label_sparse="Hyvin harva puusto",
+        label_sparse="Very sparse trees",
     ),
     terrain_points=15,
     terrain=TerrainProfile(
@@ -314,7 +317,7 @@ KANTARELLI = SpeciesProfile(
         slope_knots=[0, 1, 3, 9, 14, 30],
         slope_suitability=[0.75, 0.9, 1.0, 1.0, 0.8, 0.6],
         tpi_weight=0.75,
-        row_label="Maastonmuoto",
+        row_label="Landform",
     ),
     green_thresholds={
         "fertility": 0.65,
@@ -326,17 +329,17 @@ KANTARELLI = SpeciesProfile(
         "terrain": 0.7,     # level or gently raised ground, not a depression
     },
     esker_points=10,
-    esker_row_labels=("Lähellä harju-/reunamuodostumaa", "Ei lähellä harjumuodostumaa"),
+    esker_row_labels=("Near an esker or ice-marginal formation", "Not near an esker"),
 )
 
 
 SUPPILOVAHVERO = SpeciesProfile(
     slug="suppilovahvero",
     map_key="s",
-    name="Suppilovahvero",
+    name="Funnel chanterelle",
     latin="Craterellus tubaeformis",
     laji_target="Craterellus tubaeformis",
-    intro="Varttunut kuusivaltainen kangasmetsä; sietää kosteampaa ja karumpaa kasvupaikkaa kuin kantarelli.",
+    intro="Mature, spruce-dominated heath forest; copes with damper and poorer ground than the chanterelle.",
 
     fertility_points={
         # Calibrated against 710 real Craterellus tubaeformis sightings from
@@ -438,12 +441,12 @@ SUPPILOVAHVERO = SpeciesProfile(
         # holding on somewhat better into denser forest.
         stemcount_knots=[0, 150, 350, 900, 1600, 2600],
         suitability_knots=[0.1, 0.25, 1.0, 1.0, 0.3, 0.1],
-        row_label="Valoisuus",
-        label_good="Avoin, valoisa",
-        label_mid="Melko tiheä",
-        label_poor="Tiheä, vähän valoa",
+        row_label="Light",
+        label_good="Open, well-lit",
+        label_mid="Fairly dense",
+        label_poor="Dense, little light",
         sparse_stems=350,
-        label_sparse="Hyvin harva puusto",
+        label_sparse="Very sparse trees",
     ),
     terrain_points=15,
     terrain=TerrainProfile(
@@ -463,7 +466,7 @@ SUPPILOVAHVERO = SpeciesProfile(
         slope_knots=[0, 1, 3, 7, 12, 20, 30],
         slope_suitability=[0.5, 0.7, 0.95, 1.0, 1.0, 0.85, 0.7],
         tpi_weight=0.6,
-        row_label="Maastonmuoto",
+        row_label="Landform",
     ),
     green_thresholds={
         "fertility": 0.7,   # MT, VT and OMT
@@ -472,7 +475,7 @@ SUPPILOVAHVERO = SpeciesProfile(
         # Karkkila consists of -- but 04 is the category real sightings pick
         # out 4.4x over prevalence while 03 sits at 0.7x, and without an esker
         # gate to play the role it plays on the kantarelli map, this is the
-        # factor that keeps "Erinomainen" a short list worth walking to.
+        # factor that keeps "Excellent" a short list worth walking to.
         "development": 0.72,
         "species": 0.7,     # spruce-dominated
         "mixture": 0.45,

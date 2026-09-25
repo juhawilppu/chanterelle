@@ -16,7 +16,7 @@ a map of its own.
 
 **Live map: [kantarelli.juhawilppu.com](https://kantarelli.juhawilppu.com)**
 
-![Screenshot of the Karkkila mushroom map: a Kantarelli / Suppilovahvero switcher above forest stands shaded by probability, with an open popup breaking one stand's score down factor by factor — a green, yellow or red dot per factor showing which ones earned the score and which held it back](docs/screenshot.jpg)
+![Screenshot of the Karkkila mushroom map: a Chanterelle / Funnel chanterelle switcher above forest stands shaded by probability, with an open popup breaking one stand's score down factor by factor — a green, yellow or red dot per factor showing which ones earned the score and which held it back](docs/screenshot.jpg)
 
 ## What it does
 

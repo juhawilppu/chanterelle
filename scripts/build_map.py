@@ -11,7 +11,7 @@ disagree about most of the municipality, which is the point of having both.
 Both species ship in a single HTML file: stand geometry is by far the
 largest part of the payload and is identical between them, so it is written
 once and each species contributes only its own scores. Attributes are
-shipped as inventory codes and turned into Finnish labels in the browser,
+shipped as inventory codes and turned into English labels in the browser,
 which keeps the file smaller than the single-species map it replaces --
 this thing gets loaded over mobile data, in a forest.
 
@@ -217,8 +217,8 @@ def score_stands(stand, growthplace, treestand, treestandsummary, treestratum,
     # limited by its worst attribute, not its average. A plain sum lets a
     # stand offset a fatal weakness -- no light, say -- with two maxed-out
     # factors, which both overrates it ecologically and made some
-    # "Erinomainen" stands (green everywhere, maxed nowhere) score below
-    # "Korkea" stands carrying a red factor. Each factor is measured against
+    # "Excellent" stands (green everywhere, maxed nowhere) score below
+    # "High" stands carrying a red factor. Each factor is measured against
     # its own green threshold, so "green everywhere" means no penalty at all.
     weakest = pd.concat(
         [(df[f"{factor}_ratio"] / profile.green_thresholds[factor]).clip(upper=1)
@@ -492,11 +492,11 @@ def label_config() -> dict:
 
 
 HTML_TEMPLATE = """<!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Karkkilan sienikartta</title>
+<title>Karkkila mushroom map</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root {
@@ -582,7 +582,7 @@ HTML_TEMPLATE = """<!doctype html>
   .popup-score em { font-style: normal; font-size: 13px; font-weight: 600; opacity: .6; }
   .popup-body { padding: 4px 16px 15px; }
   /* the per-factor dot leads its row rather than trailing the value: values
-     wrap freely ("Lähellä harju-/reunamuodostumaa" does), and trailing dots
+     wrap freely ("Near an esker or ice-marginal formation" does), and trailing dots
      ended up orphaned on a line of their own. Leading dots also line up into
      one scannable column of greens and reds. */
   .popup-field { display: flex; align-items: flex-start; gap: 9px;
@@ -621,7 +621,7 @@ HTML_TEMPLATE = """<!doctype html>
 <script>
 const STANDS = __GEOJSON__;
 const SPECIES = __SPECIES__;   // one entry per mushroom, in switcher order
-const LABELS = __LABELS__;     // inventory code -> Finnish, expanded here rather
+const LABELS = __LABELS__;     // inventory code -> English, expanded here rather
                                // than repeated on every stand in the payload
 const MID = __MID_THRESHOLD__;
 const STORAGE_KEY = "karkkila-sienikartta-species";
@@ -647,7 +647,7 @@ const PALETTE = {
 };
 const FALLBACK = { fill: "#9aa39c", line: "#6f7872", ink: "#3c4340", tint: "#f0f1ef" };
 const pal = (category) => PALETTE[category] || FALLBACK;
-const CATEGORY_LABELS = { excellent: "Erinomainen", high: "Korkea", medium: "Kohtalainen" };
+const CATEGORY_LABELS = { excellent: "Excellent", high: "High", medium: "Moderate" };
 // opacity climbs with the ranking too, so the ordering survives even where the
 // basemap underneath is busy
 const FILL_OPACITY = { excellent: 0.72, high: 0.58, medium: 0.45 };
@@ -697,14 +697,14 @@ function lightLabel(cfg, ratio, stemcount) {
 // ratio is this field's contribution to the score, 0-1 relative to its own
 // max -- null means "not a scored factor", so no badge is shown. Thresholds
 // come from the active species' own green/mid cutoffs, injected from the same
-// Python constants the "Erinomainen" rule uses, so a category and its dots can
+// Python constants the "Excellent" rule uses, so a category and its dots can
 // never disagree.
 function scoreBadge(ratio, good) {
   // an invisible dot rather than none at all, so an unscored row still lines
   // its text up with the scored ones above and below it
   if (ratio == null) return '<span class="score-badge blank"></span>';
   const tier = ratio >= good ? "good" : ratio >= MID ? "mid" : "poor";
-  return `<span class="score-badge ${tier}" title="Vaikutus pisteisiin: ${tier}"></span>`;
+  return `<span class="score-badge ${tier}" title="Effect on score: ${tier}"></span>`;
 }
 
 function popupRow(label, value, ratio, good) {
@@ -718,18 +718,18 @@ function popupHtml(p, cfg) {
   const category = CATEGORIES[v[CATEGORY]];
   const soil = `${LABELS.soil[p.st] || "?"} (${LABELS.drainage[p.ds] || "?"})`;
   const rows = [
-    popupRow("Kasvupaikka", LABELS.fertility[p.fc] || "?", v[RATIO.fertility], cfg.green.fertility),
-    popupRow("Kehitysluokka", LABELS.development[p.dc] || "?", v[RATIO.development], cfg.green.development),
-    popupRow("Vallitseva puulaji", LABELS.species[p.ts] || "Muu", v[RATIO.species], cfg.green.species),
-    popupRow("Sekametsäisyys", mixtureLabel(p.div), p.div, cfg.green.mixture),
+    popupRow("Site type", LABELS.fertility[p.fc] || "?", v[RATIO.fertility], cfg.green.fertility),
+    popupRow("Development class", LABELS.development[p.dc] || "?", v[RATIO.development], cfg.green.development),
+    popupRow("Dominant tree", LABELS.species[p.ts] || "Other", v[RATIO.species], cfg.green.species),
+    popupRow("Tree mix", mixtureLabel(p.div), p.div, cfg.green.mixture),
     popupRow(cfg.light.row, lightLabel(cfg, v[RATIO.light], p.stem), v[RATIO.light], cfg.green.light),
-    popupRow("Maaperä", soil, v[RATIO.soil], cfg.green.soil),
+    popupRow("Soil", soil, v[RATIO.soil], cfg.green.soil),
     popupRow(cfg.terrain.row, landformLabel(p.tpi, p.slp), v[RATIO.terrain], cfg.green.terrain),
   ];
   // binary factor, and only for the species whose model uses it: green when
   // near an esker, red when not
   if (cfg.esker) {
-    rows.push(popupRow("Sijainti", p.esk ? cfg.esker[0] : cfg.esker[1], p.esk ? 1 : 0, 1));
+    rows.push(popupRow("Location", p.esk ? cfg.esker[0] : cfg.esker[1], p.esk ? 1 : 0, 1));
   }
 
   const c = pal(category);
@@ -739,7 +739,7 @@ function popupHtml(p, cfg) {
     `</div><div class="popup-body">` + rows.join("") +
     `<a class="gmaps-btn" target="_blank" rel="noopener" ` +
     `href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}&travelmode=driving">` +
-    `Navigoi tänne &middot; Google Maps</a></div>`;
+    `Navigate here &middot; Google Maps</a></div>`;
 }
 
 // One Leaflet layer per species, built on first use and kept afterwards, so
@@ -774,10 +774,10 @@ function speciesLayer(cfg) {
         icon: L.divIcon({ className: "", html: '<div class="sighting-flag">🚩</div>', iconSize: [20, 20], iconAnchor: [4, 18] }),
       }),
       onEachFeature: (feature, layer) => {
-        const d = feature.properties.date || "tuntematon ajankohta";
+        const d = feature.properties.date || "date unknown";
         layer.bindPopup(
-          `<div class="popup-note"><b>${cfg.name}havainto</b>` +
-          `<span>Ilmoitettu laji.fi-palveluun<br>${d}</span></div>`
+          `<div class="popup-note"><b>${cfg.name} sighting</b>` +
+          `<span>Reported to laji.fi<br>${d}</span></div>`
         );
       },
     });
@@ -790,13 +790,13 @@ function speciesLayer(cfg) {
 const legend = document.createElement("div");
 legend.className = "legend";
 legend.innerHTML =
-  '<button class="legend-close" aria-label="Piilota selite">×</button>' +
+  '<button class="legend-close" aria-label="Hide legend">×</button>' +
   '<span class="legend-title"></span>' +
   '<div class="legend-row">' +
-  `<span><span class="swatch" style="background:${PALETTE.excellent.fill}"></span>Erinomainen</span>` +
-  `<span><span class="swatch" style="background:${PALETTE.high.fill}"></span>Korkea</span>` +
-  `<span><span class="swatch" style="background:${PALETTE.medium.fill}"></span>Kohtalainen</span>` +
-  '<span>🚩 Ilmoitettu löytö (laji.fi)</span>' +
+  `<span><span class="swatch" style="background:${PALETTE.excellent.fill}"></span>${CATEGORY_LABELS.excellent}</span>` +
+  `<span><span class="swatch" style="background:${PALETTE.high.fill}"></span>${CATEGORY_LABELS.high}</span>` +
+  `<span><span class="swatch" style="background:${PALETTE.medium.fill}"></span>${CATEGORY_LABELS.medium}</span>` +
+  '<span>🚩 Reported find (laji.fi)</span>' +
   "</div><small></small>";
 document.body.appendChild(legend);
 
@@ -810,7 +810,7 @@ legend.querySelector(".legend-close").addEventListener("click", () => {
 const switcher = document.createElement("div");
 switcher.className = "species-switch";
 switcher.setAttribute("role", "tablist");
-switcher.setAttribute("aria-label", "Valitse laji");
+switcher.setAttribute("aria-label", "Choose a mushroom");
 document.body.appendChild(switcher);
 
 let active = null;
@@ -830,10 +830,10 @@ function selectSpecies(cfg, { fit = false } = {}) {
   layer.sightings.addTo(map);
   if (fit) map.fitBounds(layer.stands.getBounds());
 
-  legend.querySelector(".legend-title").textContent = `${cfg.name}-todennäköisyys`;
+  legend.querySelector(".legend-title").textContent = `${cfg.name} probability`;
   legend.querySelector("small").textContent =
-    `${cfg.intro} Metsäkuvioiden ekologisiin tunnuksiin (kasvupaikka, puusto, maaperä) ` +
-    "perustuva arvio - ei mittaustietoa itiöemistä.";
+    `${cfg.intro} An estimate from each forest stand's ecological attributes ` +
+    "(site type, trees, soil) - not a record of where mushrooms have actually grown.";
   for (const button of switcher.children) {
     button.setAttribute("aria-selected", String(button.dataset.slug === cfg.slug));
   }
@@ -878,7 +878,7 @@ function updateLocation() {
         locationMarker = L.marker(latlng, {
           icon: L.divIcon({ className: "", html: '<div class="my-location-dot"></div>', iconSize: [16, 16] }),
           zIndexOffset: 1000,
-        }).addTo(map).bindPopup("Nykyinen sijainti");
+        }).addTo(map).bindPopup("You are here");
         accuracyCircle = L.circle(latlng, { radius: pos.coords.accuracy, color: "#1a73e8", weight: 1, fillOpacity: 0.1 }).addTo(map);
       } else {
         locationMarker.setLatLng(latlng);
@@ -895,7 +895,7 @@ function updateLocation() {
         firstFix = false;
       }
     },
-    (err) => console.warn("Sijainnin haku epaonnistui:", err.message),
+    (err) => console.warn("Location lookup failed:", err.message),
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
   );
 }
