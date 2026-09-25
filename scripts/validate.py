@@ -159,15 +159,16 @@ def main() -> None:
         # the profiles are telling the species apart on the strength of their
         # author's priors rather than on the evidence.
         print("\n=== cross-model AUC (rows: whose sightings, columns: which model) ===")
-        header = "".join(f"{PROFILES[s].name:>17}" for s in slugs)
-        print(f"{'':>16}{header}")
+        width = max(len(PROFILES[s].name) for s in slugs) + 2
+        header = "".join(f"{PROFILES[s].name:>{width}}" for s in slugs)
+        print(f"{'':>{width}}{header}")
         for slug in slugs:
             cells = ""
             for model_slug in slugs:
                 profile = PROFILES[model_slug]
                 bg, bg_excluded = background(profile)
-                cells += f"{evaluate(profile, sightings[slug], bg, bg_excluded)['auc']:>17.3f}"
-            print(f"{PROFILES[slug].name:>16}{cells}")
+                cells += f"{evaluate(profile, sightings[slug], bg, bg_excluded)['auc']:>{width}.3f}"
+            print(f"{PROFILES[slug].name:>{width}}{cells}")
 
 
 if __name__ == "__main__":
