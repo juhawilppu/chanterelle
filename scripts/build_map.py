@@ -38,7 +38,7 @@ GTK_FORMATIONS_PATH = ROOT / "data" / "cache" / f"gtk_formations_{MUNICIPALITY}.
 DEM_CACHE_PATH = topo.dem_cache_path(ROOT, MUNICIPALITY)
 TERRAIN_CACHE_PATH = ROOT / "data" / "cache" / f"terrain_stands_{MUNICIPALITY}.npz"
 OUTPUT_GEOJSON = ROOT / "output" / "scored_stands.geojson"
-OUTPUT_HTML = ROOT / "output" / "karkkila_sienikartta.html"
+OUTPUT_HTML = ROOT / "output" / "karkkila_mushroom_map.html"
 
 CURRENT_TREESTAND_CLASS = "2"  # "Nykytilan puusto" = current, as opposed to inventory/forecast
 
